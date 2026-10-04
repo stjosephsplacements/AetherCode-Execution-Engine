@@ -1,0 +1,122 @@
+name: promote
+
+# Continuous promotion pipeline.
+#
+# When the CI workflow finishes GREEN on `development`, this automatically
+# carries the tree forward:
+#
+#   development -> testing    (merged - CI-gated, no human review)
+#   testing     -> staging    (merged - CI-gated, no human review)
+#   staging     -> production (PR OPENED only - production requires a human
+#                               approving review, so this hop is never merged
+#                               here)
+#
+# Each hop is idempotent: if the target already contains the source's commits,
+# the hop is skipped. A `concurrency` group serializes promotions so two runs
+# never interleave.
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    branches: [development]
+    types: [completed]
+
+permissions:
+  contents: write
+  pull-requests: write
+  checks: read
+  actions: read
+
+concurrency:
+  group: promote
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Promote development -> testing -> staging; open staging -> production
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+
+          # Exit 0 when DST is behind SRC (SRC has commits DST lacks).
+          behind() {
+            local src="$1" dst="$2" n
+            git fetch origin "$src" "$dst" --quiet
+            n="$(git rev-list --count "origin/${dst}..origin/${src}")"
+            [ "$n" -gt 0 ]
+          }
+
+          # Wait (up to ~20 min) for a PR's checks to finish; return 1 on red.
+          wait_green() {
+            local n="$1" i out pending failed
+            for i in $(seq 1 60); do
+              out="$(gh pr checks "$n" --repo "$REPO" 2>/dev/null || true)"
+              pending="$(printf '%s\n' "$out" | grep -cE 'pending|in_progress|queued' || true)"
+              failed="$(printf '%s\n' "$out" | grep -cE 'fail' || true)"
+              echo "  [pr #${n} ${i}/60] pending=${pending:-0} failed=${failed:-0}"
+              if [ -n "$out" ] && [ "${pending:-1}" = "0" ]; then
+                if [ "${failed:-0}" != "0" ]; then return 1; fi
+                return 0
+              fi
+              sleep 20
+            done
+            echo "  PR #${n} timed out"
+            return 1
+          }
+
+          # Open a PR src->dst, wait for green CI, merge (merge commit, keep head).
+          promote() {
+            local src="$1" dst="$2" existing prnum
+            echo "==> ${src} -> ${dst}"
+            if ! behind "$src" "$dst"; then
+              echo "  ${dst} already contains ${src}; skipping"
+              return 0
+            fi
+            existing="$(gh pr list --repo "$REPO" --state open --base "$dst" --head "$src" --json number --jq '.[].number' | head -n1 || true)"
+            [ -n "${existing}" ] && { echo "  closing stale #${existing}"; gh pr close "$existing" --repo "$REPO" || true; }
+            prnum="$(gh pr create --repo "$REPO" --base "$dst" --head "$src" \
+              --title "promote: ${src} -> ${dst}" \
+              --body "Automatic promotion of ${src} to ${dst}." \
+              --json number --jq .number)"
+            echo "  opened PR #${prnum}"
+            if ! wait_green "$prnum"; then
+              echo "::error::${src} -> ${dst} failed CI"
+              exit 1
+            fi
+            echo "  merging #${prnum}"
+            gh pr merge "$prnum" --repo "$REPO" --merge --no-delete-branch
+            echo "  merged ${src} -> ${dst}"
+          }
+
+          # Open a PR src->dst but never merge it (human gate).
+          open_only() {
+            local src="$1" dst="$2" existing url
+            echo "==> ${src} -> ${dst} (human gate)"
+            if ! behind "$src" "$dst"; then
+              echo "  ${dst} already contains ${src}; nothing to open"
+              return 0
+            fi
+            existing="$(gh pr list --repo "$REPO" --state open --base "$dst" --head "$src" --json number --jq '.[].number' | head -n1 || true)"
+            if [ -n "${existing}" ]; then
+              echo "  PR #${existing} already open for ${src} -> ${dst}"
+              return 0
+            fi
+            url="$(gh pr create --repo "$REPO" --base "$dst" --head "$src" \
+              --title "promote: ${src} -> ${dst}" \
+              --body "Automatic promotion of ${src} to ${dst}. **Requires an approving review from an org member before merge.**" \
+              --json url --jq .url)"
+            echo "  opened ${url}"
+          }
+
+          promote development testing
+          promote testing staging
+          open_only staging production
+          echo "==> done"
