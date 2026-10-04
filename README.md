@@ -99,44 +99,9 @@ sudo systemctl enable --now aethercode-exec
 
 ## Architecture
 
-```
-Browser / Web Client
-       │
-       │  POST /api/v1/execute  ──────────────────────────────┐
-       │                                                        │
-       ▼                                                        ▼
- ┌─────────────────────────────────────────────────────────────────┐
- │                    Go HTTP Gateway (:5100)                       │
- │  LoggingMiddleware → CORS → OIDC Auth → HandleExecute/Stream    │
- │  Ingest semaphore (64) · Rate limiter · Admission control       │
- └────────────┬─────────────────────────────┬────────────────────┘
-              │                             │
-              │ INSERT submission           │ XADD
-              ▼                             ▼
-        ┌──────────┐               ┌──────────────────┐
-        │ PG 18    │               │  Redis 7 Streams  │
-        │ (system  │               │  submit / run     │
-        │  of      │               │  (weighted 3:1)   │
-        │  record) │               └────────┬─────────┘
-        └──────────┘                        │ XREADGROUP
-              ▲                             ▼
-              │               ┌────────────────────────┐
-              │               │  Go Workers (×64)       │
-              │ InsertResults │  DualConsumer           │
-              └───────────────┤  compile → run tests   │
-                              │  → verdict             │
-                              └────────────┬───────────┘
-                                           │
-                                           │ Redis pub/sub
-                                           ▼
-                              ┌────────────────────────┐
-                              │  SSE Hub (HandleStream) │
-                              │  subscribe-before-replay│
-                              │  heartbeat 15s · 5min  │
-                              │  deadline · resume from│
-                              │  Last-Event-ID         │
-                              └────────────────────────┘
-```
+<p align="center">
+  <img src="Architecture.png" alt="AetherCode Execution Engine — system architecture" width="100%">
+</p>
 
 ### Hot path (run mode)
 
