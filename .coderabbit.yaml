@@ -1,0 +1,31 @@
+# CodeRabbit configuration
+# Reviews are enabled on every branch, including forks and non-default targets.
+# https://docs.coderabbit.ai/getting-started/configure-coderabbit
+
+language: "en-US"
+
+reviews:
+  # Always review, regardless of target branch or fork origin.
+  review_status: true
+  auto_review:
+    enabled: true
+    # Review PRs that target any branch — not just the default branch.
+    base_branches:
+      - ".*"
+    # Also review PRs opened from forks.
+    drafts: false
+
+  # Surface high-signal findings inline.
+  path_filters:
+    - "!**/*.sum"
+    - "!**/*.lock"
+    - "!**/vendor/**"
+    - "!**/testdata/**"
+
+  profile: "chill"
+
+  # Post a review-status comment so the team always knows CR ran.
+  collapse_walkthrough: false
+
+chat:
+  auto_reply: true

@@ -1,12 +1,15 @@
 name: branch-cleanup
 
-# Auto-delete feature/topic branches after they are merged.
+# Auto-delete feature/topic branches after they are merged and close any
+# stale open PRs that were still pointing at the deleted branch.
 #
-# Fires when a PR is closed *and merged*. If the PR's head branch is one of the
-# four main branches (development/testing/staging/production) we leave it alone;
-# otherwise it was an ephemeral feature branch and we delete it. This is the
-# "delete branches after merging" guarantee (GitHub's rulesets API has no
-# delete-on-merge rule, so this workflow provides it).
+# The repo-level `delete_branch_on_merge` setting handles the common case
+# via GitHub's UI; this workflow is the belt-and-suspenders guarantee for
+# branches that GitHub's setting sometimes misses (cross-fork heads, etc.)
+# and provides the stale-PR cleanup that the setting never does.
+#
+# Main branches (development / testing / staging / production) are never
+# deleted — they are permanent environment branches, not topic branches.
 
 on:
   pull_request:
@@ -14,27 +17,51 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   cleanup:
-    if: github.event.pull_request.merged
+    if: github.event.pull_request.merged == true
     runs-on: ubuntu-latest
     timeout-minutes: 5
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - name: Delete merged feature branch (keep main branches)
+      - name: Delete merged feature branch and close stale PRs
         run: |
           set -euo pipefail
           HEAD="${{ github.event.pull_request.head.ref }}"
           REPO="${GITHUB_REPOSITORY}"
+
           case "${HEAD}" in
             development|testing|staging|production)
-              echo "Head branch '${HEAD}' is a main branch; keeping it."
+              echo "Head branch '${HEAD}' is a permanent env branch; keeping it."
               exit 0
               ;;
           esac
+
+          # ── 1. Delete the branch ───────────────────────────────────────────
           echo "Deleting merged feature branch '${HEAD}'"
           git push origin --delete "${HEAD}" \
             || gh api -X DELETE "repos/${REPO}/git/refs/heads/${HEAD}" \
-            || echo "branch '${HEAD}' already gone"
+            || echo "  branch '${HEAD}' already gone"
+
+          # ── 2. Close any remaining open PRs from this branch ──────────────
+          # The promote workflow may have opened a PR for a hop that hadn't
+          # merged yet (e.g. feature/x -> development was still in flight
+          # while another PR from feature/x into testing sat open).  Close
+          # them now so the PR list stays clean.
+          echo "Closing stale open PRs with head '${HEAD}'"
+          stale="$(gh pr list --repo "$REPO" --state open \
+            --head "$HEAD" \
+            --json number --jq '.[].number')"
+          if [ -z "$stale" ]; then
+            echo "  none found"
+          else
+            for n in $stale; do
+              echo "  closing PR #${n}"
+              gh pr close "$n" --repo "$REPO" \
+                --comment "Branch \`${HEAD}\` was deleted after merging; closing stale PR." \
+                || echo "  could not close #${n} (may already be closed)"
+            done
+          fi
