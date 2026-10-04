@@ -70,7 +70,7 @@ jobs:
         # release this config and codebase were verified against, so CI and
         # local `golangci-lint run` lint identically. Note: golangci-lint v2
         # requires golangci-lint-action v7 (v6 only supports the v1 line).
-        uses: golangci/golangci-lint-action@v7
+        uses: golangci/golangci-lint-action@v9
         with:
           version: v2.12.2
           args: --timeout=5m
