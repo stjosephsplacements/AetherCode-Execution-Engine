@@ -1,0 +1,34 @@
+# Dependabot configuration
+# Docs: https://docs.github.com/github/creating-an-updated-dependencies-policy/keeping-dependencies-up-to-date-automatically-with-dependabot
+#
+# On a public repo, Dependabot security updates are enabled automatically once
+# this file exists; it governs routine version-update PRs below.
+version: 2
+
+updates:
+  # Go module dependencies (go.mod / go.sum)
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "gomod"
+
+  # Container image versions (Dockerfile + docker-compose.yml)
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "docker"
+
+  # GitHub Actions workflow versions (.github/workflows)
+  - package-ecosystem: "github-actions"
+    directory: ".github/workflows"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "dependencies"
+      - "github-actions"
