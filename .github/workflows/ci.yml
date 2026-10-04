@@ -1,0 +1,70 @@
+name: CI
+
+# Every promotion (development -> testing -> staging -> production) is a PR
+# that must be green on CI. CI also runs on direct pushes to each branch.
+on:
+  push:
+    branches: [development, testing, staging, production]
+  pull_request:
+
+# The engine is audited-by-default: this is a code-execution service, so the
+# PR pipeline is the main line of defense.
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Module tidy check
+        run: |
+          go mod tidy
+          git diff --exit-status go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Format check
+        run: |
+          unformatted="$(gofmt -s -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "::error::The following files are not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -s -d $unformatted
+            exit 1
+          fi
+
+      # Unit tests are hermetic (the rate limiter uses an in-process
+      # miniredis), so no external services are required here.
+      - name: Test (race detector)
+        run: go test -race -count=1 ./...
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        # Pinned to v1.64.x: .golangci.yml uses the v1 config schema.
+        # (golangci-lint v2 changed the config format and would reject this file.)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v1.64.8
+          args: --timeout=5m

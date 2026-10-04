@@ -1,0 +1,44 @@
+# Binaries (root-level compiled outputs only)
+/stj-exec
+/aethercode-exec
+/loadgen
+*.out
+*.exe
+
+# Build artifacts
+/tmp/
+
+# Spike — large binary and runtime artifacts
+spike/go-judge/go-judge
+spike/go-judge/file-store/
+spike/go-judge/gojudge.log
+spike/go-judge/dotenv
+spike/go-judge/containerPasswd.txt
+
+# go-judge sandbox runtime data (dev)
+docker/go-judge/file-store/
+
+# Data directories (postgres, etc.)
+data/
+
+# Environment / secrets
+.env
+*.env
+/etc/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test outputs
+*.test
+coverage.out
+
+# Compiled Postman collection (generated, not source)
+postman_collection_generated.json

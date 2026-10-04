@@ -1,0 +1,24 @@
+# VCS / meta
+.git
+.gitignore
+.github
+
+# Docs & research (not needed to build the engine)
+*.md
+docs/
+spike/
+docker/
+LICENSE
+
+# Local data & environment
+data/
+.env
+*.env
+
+# Build outputs & OS noise
+aethercode-exec
+stj-exec
+loadgen
+*.out
+*.exe
+.DS_Store

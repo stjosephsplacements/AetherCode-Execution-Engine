@@ -1,0 +1,39 @@
+[Unit]
+Description=AetherCode Execution Engine
+After=network.target redis-server.service postgresql.service
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=aethercode-exec
+Group=aethercode-exec
+WorkingDirectory=/opt/aethercode-exec
+ExecStart=/opt/aethercode-exec/aethercode-exec
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=/etc/aethercode-exec/env
+
+LimitNOFILE=65536
+KillMode=mixed
+TimeoutStopSec=35
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=false
+ReadWritePaths=/opt/aethercode-exec
+
+[Install]
+WantedBy=multi-user.target

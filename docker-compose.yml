@@ -1,0 +1,87 @@
+# AetherCode Execution Engine — full local development stack.
+#
+#   docker compose up --build
+#
+# Engine health:  curl http://127.0.0.1:5100/api/v1/health
+#
+# The go-judge service runs with `privileged: true` because its sandbox must
+# create cgroups + namespaces. That is acceptable for a disposable dev stack on
+# a machine you control; for production use the systemd deployment
+# (deploy/aethercode-exec.service) with explicit resource limits instead.
+
+name: aethercode
+
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: aethercode
+      POSTGRES_PASSWORD: aethercode
+      POSTGRES_DB: aethercode_exec
+    ports:
+      - "5433:5433"
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aethercode -d aethercode_exec"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  go-judge:
+    build:
+      context: ./docker/go-judge
+    privileged: true # cgroups + namespaces for the sandbox (dev only)
+    volumes:
+      - gojudge-data:/opt/file-store
+    command:
+      - "-http-addr=0.0.0.0:5050"
+      - "-mount-conf=/opt/mount.yaml"
+      - "-enable-cpu-rate"
+      - "-auth-token=${AC_JUDGE_TOKEN:-aethercode-dev-token}"
+      - "-parallelism=8"
+      - "-output-limit=16m"
+      - "-copy-out-limit=16m"
+      - "-dir=/opt/file-store"
+    ports:
+      - "5050:5050"
+
+  engine:
+    build: .
+    environment:
+      AC_GATEWAY_ADDR: "0.0.0.0:5100"
+      AC_DATABASE_URL: "postgres://aethercode:aethercode@db:5433/aethercode_exec"
+      AC_REDIS_ADDR: "redis:6379"
+      AC_JUDGE_URL: "http://go-judge:5050"
+      AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN:-aethercode-dev-token}"
+      AC_WORKER_COUNT: "8"
+      AC_AUTH_ENABLED: "false"
+      AC_LOG_FORMAT: "text"
+    ports:
+      - "5100:5100"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      go-judge:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:5100/api/v1/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  db-data:
+  gojudge-data:
