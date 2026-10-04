@@ -1,0 +1,46 @@
+# CodeRabbit configuration
+# Docs: https://docs.coderabbit.ai/configuration-options
+#
+# This file pre-configures CodeRabbit so that, once the CodeRabbit GitHub App
+# is installed on the repo, reviews are focused on the engine's load-bearing
+# invariants rather than generic style.
+version: 1
+
+reviews:
+  auto_review:
+    enabled: true
+    base_branches:
+      - development
+      - testing
+      - staging
+      - production
+    ignore_empty_commits: true
+
+  instructions: |
+    You are reviewing AetherCode, a distributed code-execution engine that
+    runs untrusted user code inside a go-judge sandbox. Prioritize
+    correctness and the reliability invariants below. Be concise and
+    concrete; cite file:line and show the fix.
+
+    ## Load-bearing invariants (flag any change that weakens them)
+    - Insert before enqueue: the PostgreSQL row must exist before the Redis
+      XADD. The orphan reaper and "zero lost jobs" guarantee rely on this.
+    - Subscribe before replay: the SSE handler must Subscribe before
+      GetEventLog, or a VERDICT published in between is silently dropped.
+    - writeCtx / XAck use context.WithoutCancel so in-flight jobs survive a
+      SIGTERM shutdown.
+    - CAS verdict writes: UPDATE ... WHERE status NOT IN ('completed','failed')
+      prevents double-writes on redelivery.
+    - Hidden test inputs never enter the sandbox, and tests never run inside
+      the sandbox.
+    - Redis Streams is the only queue (no Kafka).
+
+    ## Focus areas
+    - Correctness, race conditions, and error handling on the hot path
+      (execute -> enqueue -> worker -> verdict -> SSE).
+    - The sandbox boundary: nothing untrusted should escape it.
+    - Resource cleanup (goroutines, connections, contexts, timers).
+
+    ## Style
+    - Keep feedback actionable; skip nitpicks that don't affect correctness
+      or reliability.
