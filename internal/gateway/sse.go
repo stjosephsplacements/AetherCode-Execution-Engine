@@ -32,6 +32,9 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid job_id"}`, http.StatusBadRequest)
 		return
 	}
+	// Use the canonical UUID string form to prevent SSE header injection from
+	// a maliciously crafted job_id query parameter.
+	jobID = parsedJobID.String()
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

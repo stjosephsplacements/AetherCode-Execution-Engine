@@ -139,7 +139,7 @@ jobs:
               out="$(gh pr checks "$n" --repo "$REPO" 2>/dev/null || true)"
               pending="$(printf '%s\n' "$out" | grep -cE 'pending|in_progress|queued' || true)"
               failed="$(printf '%s\n' "$out"  | grep -cE 'fail'                        || true)"
-              echo "  [pr #${n} ${i}/60] pending=${pending:-0} failed=${failed:-0}"
+              echo "  [pr #${n} ${i}/60] pending=${pending:-0} filed=${failed:-0}"
               if [ -n "$out" ] && [ "${pending:-1}" = "0" ]; then
                 if [ "${failed:-0}" != "0" ]; then return 1; fi
                 return 0
