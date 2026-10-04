@@ -119,9 +119,9 @@ var Languages = map[string]LangConfig{
 // BuildCompileCmd builds the go-judge Cmd for the compilation step.
 func BuildCompileCmd(lang LangConfig, sourceCode string) Cmd {
 	return Cmd{
-		Args:  lang.CompileArgs,
-		Env:   lang.CompileEnv,
-		Files: []CmdFile{Stdin(""), Collector("stdout", stdoutMax), Collector("stderr", stderrMax)},
+		Args:          lang.CompileArgs,
+		Env:           lang.CompileEnv,
+		Files:         []CmdFile{Stdin(""), Collector("stdout", stdoutMax), Collector("stderr", stderrMax)},
 		CPULimit:      lang.CompileCPU,
 		MemoryLimit:   lang.CompileMem,
 		ProcLimit:     lang.CompileProc,

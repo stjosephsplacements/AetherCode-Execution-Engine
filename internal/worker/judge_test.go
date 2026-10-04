@@ -38,12 +38,12 @@ func TestJudgeOutput(t *testing.T) {
 // TestNormalizeOutput checks the per-line trimming helper directly.
 func TestNormalizeOutput(t *testing.T) {
 	cases := map[string]string{
-		"a  \n b  \n":  "a\n b",
-		"line\n\n\n":   "line",
-		"pad\t\t":      "pad",
-		"a\r\nb\r\n":   "a\nb",
-		"no-change":    "no-change",
-		"":             "",
+		"a  \n b  \n": "a\n b",
+		"line\n\n\n":  "line",
+		"pad\t\t":     "pad",
+		"a\r\nb\r\n":  "a\nb",
+		"no-change":   "no-change",
+		"":            "",
 	}
 	for in, want := range cases {
 		if got := normalizeOutput(in); got != want {

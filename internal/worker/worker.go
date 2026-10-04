@@ -335,7 +335,7 @@ func (w *Worker) runTest(ctx context.Context, lang sandbox.LangConfig, sourceCod
 	r := results[0]
 	tr := model.TestResult{
 		TestIndex:     testIndex,
-		CPUTimeNs:     int64(r.Time), //nolint:gosec // go-judge reports CPU time in ns (non-negative)
+		CPUTimeNs:     int64(r.Time),   //nolint:gosec // go-judge reports CPU time in ns (non-negative)
 		MemoryBytes:   int64(r.Memory), //nolint:gosec // go-judge reports memory usage in bytes (non-negative)
 		StdoutPreview: r.Files["stdout"],
 		StderrPreview: r.Files["stderr"],
