@@ -421,18 +421,26 @@ See `docs/benchmark-results.md` for full latency breakdowns and `docs/spike-resu
 
 ## Releases
 
-Releases flow through a gated branch pipeline: `development` → `testing` →
-`staging` → `production`.
+Releases flow through a gated four-branch pipeline:
 
-- A change is merged to `development` via a pull request (CI must be green),
-  then is **automatically promoted** to `testing` and `staging` as CI goes
-  green on each.
-- Promotion to `production` opens a pull request that requires **CI green plus
-  one approving review from an org member** before it can be merged.
-- Dependabot dependency updates target `production` directly and are
-  auto-approved and auto-merged once their CI is green.
+```
+development  →  testing  →  staging  →  production
+```
 
-`production` is the default branch.
+`development` is the default branch — all work starts here.
+
+| Branch | Promotion trigger |
+|---|---|
+| `development` | CI green on a merged PR |
+| `testing` | Automatic — the CI workflow opens and merges a PR from `development` once CI is green |
+| `staging` | Automatic — same, promoted from `testing` |
+| `production` | **Human gate** — a PR is opened automatically from `staging`, but merging requires one approving review from an org member |
+
+**Topic branches** (`feat/*`, `fix/*`, `security/*`, etc.) follow the same flow: once CI is green on the topic branch, a PR is opened into `development` automatically and merged when its CI passes.
+
+**Merge policy:** all promotions use a standard merge commit. Squash and rebase merges are disabled to preserve a linear, auditable history across the pipeline.
+
+**Dependabot** dependency updates target `development` and are auto-approved and auto-merged once their CI is green, then flow through the normal pipeline.
 
 ---
 
