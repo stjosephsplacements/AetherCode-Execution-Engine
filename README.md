@@ -27,6 +27,7 @@ On-premise distributed code execution engine. Accepts code submissions over HTTP
 - [API Reference](#api-reference)
 - [Operations](#operations)
 - [Performance](#performance)
+- [Releases](#releases)
 - [Contributing](#contributing)
 - [Security](#security)
 - [License](#license)
@@ -415,6 +416,23 @@ Benchmarked on a dual-socket, 256-thread Linux host (go-judge parallelism 64, 64
 | **5,000 concurrent / 15,000 total** | **2m 4s** | **121/s** | **0** |
 
 See `docs/benchmark-results.md` for full latency breakdowns and `docs/spike-results.md` for sandbox selection rationale.
+
+---
+
+## Releases
+
+Releases flow through a gated branch pipeline: `development` → `testing` →
+`staging` → `production`.
+
+- A change is merged to `development` via a pull request (CI must be green),
+  then is **automatically promoted** to `testing` and `staging` as CI goes
+  green on each.
+- Promotion to `production` opens a pull request that requires **CI green plus
+  one approving review from an org member** before it can be merged.
+- Dependabot dependency updates target `production` directly and are
+  auto-approved and auto-merged once their CI is green.
+
+`production` is the default branch.
 
 ---
 
