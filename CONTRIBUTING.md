@@ -10,6 +10,16 @@ security is high. Please read this before opening a PR.
 - **Docker + Docker Compose** (for the full dev stack)
 - Optionally **golangci-lint** (v2.12.2 — the version CI pins; config in `.golangci.yml`) if you don't want to lean on CI
 
+## Before you start
+
+For **bug fixes and small improvements**, go ahead and open a PR — no prior
+discussion needed.
+
+For **new features, API changes, or anything that touches the sandbox boundary,
+auth, or the queue**, open an issue first. Describing the problem and your
+proposed approach before writing code prevents wasted effort and helps
+maintainers give early feedback on the design.
+
 ## Getting started
 
 ```bash
@@ -41,10 +51,12 @@ make down        # stop the stack
 ## Development workflow
 
 ```bash
-# branch
+# Branch from development (the default branch)
+git checkout development
+git pull
 git checkout -b feat/my-change
 
-# edit, then verify the full local gate matches CI:
+# Edit, then verify the full local gate matches CI:
 make build
 make test
 make lint
@@ -56,32 +68,60 @@ Run the same checks CI runs before pushing. CI fails on any of:
 
 ## Branches & release flow
 
-This project uses a four-branch, environment-mapped model. A change moves
-**one branch at a time**, and each promotion is a pull request that merges only
-when CI is green — so a release reaches `production` only by passing all tests
-on every branch in sequence.
+This project uses a four-branch, environment-mapped model. All work starts on
+`development` (the default branch) and moves **one branch at a time** toward
+`production`. Every promotion is driven by the CI automation described below —
+no manual cherry-picks.
 
 ```
-development  →  testing  →  staging  →  production   (default branch)
+development  →  testing  →  staging  →  production
+(default)
 ```
 
 | Branch | Role |
 |---|---|
-| `development` | Day-to-day feature work. Merge here with a green PR. |
-| `testing` | Integrated, buildable candidate. Promote from `development`. |
-| `staging` | Pre-release; mirrors the staging environment. Promote from `testing`. |
-| `production` | The default branch, what is served. Promote from `staging`. |
+| `development` | Day-to-day feature work. All PRs target this branch. |
+| `testing` | Integrated, buildable candidate. Auto-promoted from `development` when CI is green. |
+| `staging` | Pre-release; mirrors the staging environment. Auto-promoted from `testing` when CI is green. |
+| `production` | What is served. Promoted from `staging` — requires one approving review before merge. |
 
-Rules (enforced by CI + branch protection):
+### Promotion rules
 
 - **No direct pushes** to any of the four branches — everything goes through a
   pull request.
-- A PR merges **only when the `test` and `lint` checks are green**.
-- Promotions are **linear**: `development → testing → staging → production`.
-  Never skip a stage.
-- **Hot-fixes follow the same path** so each environment's tests run against
-  the fix. If a regression is found on `production`, branch from
-  `production`, fix, and back-port to the earlier branches.
+- A PR merges only when the `test` and `lint` CI checks are green.
+- `development → testing → staging` promotions happen **automatically**: once
+  CI is green on `development`, the CI workflow opens a PR into `testing`, waits
+  for its checks, and merges it. The same happens for `testing → staging`.
+- `staging → production` is the **only human gate**: the CI workflow opens the
+  PR automatically, but an org member must approve it before it can be merged.
+  Organization admins have bypass access for emergency situations.
+- **Topic branches** (`feat/*`, `fix/*`, `security/*`, `ci/*`, `docs/*`,
+  `chore/*`, `refactor/*`) are also handled: once CI is green on the topic
+  branch, a PR into `development` is opened and merged automatically.
+- **Merge policy:** all promotions use a standard merge commit. Squash and
+  rebase merges are disabled to keep a linear, auditable history across the
+  pipeline.
+
+### Hotfixes
+
+If a regression reaches `production`, do **not** skip stages:
+
+```bash
+# Branch from production so the fix contains exactly what is live
+git checkout production
+git pull
+git checkout -b fix/my-hotfix
+
+# Fix, test, push
+# Open a PR into production — an org admin can approve and merge it
+
+# Back-port: open a PR from your fix branch into staging, then testing, then development
+# (or let the promotion pipeline carry it forward once CI is green on production)
+```
+
+Every environment's tests still run against the fix. The extra few minutes are
+worth it.
 
 ## Code style
 
@@ -105,7 +145,7 @@ Rules (enforced by CI + branch protection):
 - Add tests for new behavior. `make e2e` exercises the full pipeline but requires
   a running stack — it is not part of the hermetic unit suite.
 
-## Design invariants (do not reintroduce the old behavior)
+## Design invariants
 
 Several invariants in `CLAUDE.md` exist to make "zero lost jobs" provable. If a
 change touches them, call it out explicitly in the PR description:
@@ -122,8 +162,19 @@ Keep the body focused; reference the invariant you touched if relevant.
 
 ## Pull requests
 
-1. Small, focused diffs. One concern per PR.
-2. Fill in the PR template (what changed, why, how it was tested).
-3. For anything touching the sandbox boundary, auth, or the queue, explain the
-   security/correctness reasoning in the description — reviewers will look for it.
-4. CI must be green (build, vet, fmt, tests, lint).
+A good PR description covers:
+
+1. **What changed** — one sentence summary.
+2. **Why** — the motivation (links to an issue if one exists).
+3. **How it was tested** — unit tests added, `make e2e` run, manual steps.
+4. **Invariants touched** — if any of the four design invariants above apply,
+   say which one and why the change is still safe.
+5. **Security/correctness reasoning** — required for anything touching the
+   sandbox boundary, auth, the queue, or rate limiting.
+
+Other guidelines:
+
+- Small, focused diffs. One concern per PR.
+- CI must be green (build, vet, fmt, tests, lint) before requesting review.
+- PRs into `development` need **one approving review**. The same rule applies
+  at every stage through to `production`.
