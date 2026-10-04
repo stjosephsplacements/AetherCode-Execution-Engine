@@ -1,5 +1,9 @@
 # AetherCode Execution Engine
 
+<p align="center">
+  <img src="AetherCode.png" alt="AetherCode Execution Engine" width="60%">
+</p>
+
 On-premise distributed code execution engine. Accepts code submissions over HTTP, runs them in isolated sandboxes, and streams verdicts back via Server-Sent Events.
 
 ![CI](https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/ci.yml/badge.svg)
