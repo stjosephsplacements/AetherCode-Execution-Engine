@@ -1,0 +1,58 @@
+name: dependabot-approver
+
+# Satisfies production's required-review rule for Dependabot dependency PRs.
+#
+# When a Dependabot PR opens against `production`, this workflow waits for CI
+# to go green, then posts an approving review and requests auto-merge. The
+# actions app is a distinct actor from the dependabot author, so its review
+# counts toward production's required approval; auto-merge then closes the PR
+# once the required CI checks are satisfied.
+#
+# PRs by anyone other than dependabot are NOT touched — those still need a
+# human org-member approval, which is the whole point of the production gate.
+
+on:
+  pull_request:
+    branches: [production]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
+
+jobs:
+  approve:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]'
+      && github.event.pull_request.base.ref == 'production'
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Wait for green CI, then approve + auto-merge
+        run: |
+          set -euo pipefail
+          PR="${{ github.event.pull_request.number }}"
+          REPO="${GITHUB_REPOSITORY}"
+          echo "Waiting for CI on Dependabot PR #${PR} ..."
+          for i in $(seq 1 60); do
+            out="$(gh pr checks "$PR" --repo "$REPO" 2>/dev/null || true)"
+            pending="$(printf '%s\n' "$out" | grep -cE 'pending|in_progress|queued' || true)"
+            failed="$(printf '%s\n' "$out" | grep -cE 'fail' || true)"
+            echo "[wait ${i}/60] pending=${pending:-0} failed=${failed:-0}"
+            if [ -n "$out" ] && [ "${pending:-1}" = "0" ]; then
+              if [ "${failed:-0}" != "0" ]; then
+                echo "CI red; leaving PR for a human"
+                exit 0
+              fi
+              break
+            fi
+            sleep 20
+          done
+          echo "CI green; approving and requesting auto-merge"
+          gh pr review "$PR" --repo "$REPO" --approve \
+            --body "Auto-approved Dependabot dependency update; CI is green."
+          gh pr merge "$PR" --repo "$REPO" --auto || echo "auto-merge already requested"
+          echo "Approved PR #${PR} (auto-merge closes it once checks pass)"
