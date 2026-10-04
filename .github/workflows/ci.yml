@@ -4,7 +4,18 @@ name: CI
 # that must be green on CI. CI also runs on direct pushes to each branch.
 on:
   push:
-    branches: [development, testing, staging, production]
+    branches:
+      - development
+      - testing
+      - staging
+      - production
+      - "feature/**"
+      - "fix/**"
+      - "security/**"
+      - "ci/**"
+      - "docs/**"
+      - "chore/**"
+      - "refactor/**"
   pull_request:
 
 # The engine is audited-by-default: this is a code-execution service, so the
