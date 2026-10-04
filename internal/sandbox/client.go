@@ -57,7 +57,7 @@ func (c *Client) Run(ctx context.Context, req Request) ([]Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: request failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close() //nolint:errcheck // best-effort: the http client reuses pooled connections
 
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
 	if err != nil {
@@ -86,7 +86,7 @@ func (c *Client) Ping(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("sandbox: ping failed: %w", err)
 	}
-	defer resp.Body.Close()
+	defer resp.Body.Close()        //nolint:errcheck // best-effort: the http client reuses pooled connections
 	io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort: drain body so the connection can be reused
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("sandbox: ping returned HTTP %d", resp.StatusCode)
@@ -158,11 +158,11 @@ func CachedFile(fileID string) CopyIn {
 }
 
 const (
-	StatusAccepted     = "Accepted"
-	StatusNonzeroExit  = "Nonzero Exit Status"
-	StatusTimeLimitEx  = "Time Limit Exceeded"
+	StatusAccepted      = "Accepted"
+	StatusNonzeroExit   = "Nonzero Exit Status"
+	StatusTimeLimitEx   = "Time Limit Exceeded"
 	StatusMemoryLimitEx = "Memory Limit Exceeded"
 	StatusOutputLimitEx = "Output Limit Exceeded"
-	StatusSignalled    = "Signalled"
-	StatusInternalErr  = "Internal Error"
+	StatusSignalled     = "Signalled"
+	StatusInternalErr   = "Internal Error"
 )

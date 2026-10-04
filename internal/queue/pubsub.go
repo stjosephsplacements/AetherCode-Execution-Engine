@@ -122,7 +122,7 @@ func (p *PubSub) Subscribe(ctx context.Context, jobID string) <-chan eventlog.Ev
 	go func() {
 		defer p.wg.Done()
 		defer close(ch)
-		defer sub.Close()
+		defer sub.Close() //nolint:errcheck // best-effort: unsubscribe when the SSE handler's goroutine exits
 
 		msgCh := sub.Channel()
 		for {

@@ -86,7 +86,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		if lastEventID != "" && compareEventIDs(evt.ID, lastEventID) <= 0 {
 			continue
 		}
-		if _, err := w.Write(evt.MarshalSSE()); err != nil {
+		if _, err := w.Write(evt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
 			return
 		}
 		flusher.Flush()
@@ -124,7 +124,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 						// client already has this event
 						return
 					}
-					if _, err := w.Write(evt.MarshalSSE()); err != nil {
+					if _, err := w.Write(evt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
 						slog.Warn("sse: write deadline terminal failed", "job_id", jobID, "err", err)
 					}
 					flusher.Flush()
@@ -141,7 +141,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 						"tests_passed": sub.TestsPassed,
 						"test_count":   sub.TestCount,
 					})
-					if _, err := w.Write(dbEvt.MarshalSSE()); err != nil {
+					if _, err := w.Write(dbEvt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
 						slog.Warn("sse: write db verdict failed", "job_id", jobID, "err", err)
 					}
 					flusher.Flush()
@@ -160,7 +160,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 				slog.Warn("sse: failed to persist timeout event", "job_id", jobID, "err", err)
 			}
 			pubCancel()
-			if _, err := w.Write(timeoutEvt.MarshalSSE()); err != nil {
+			if _, err := w.Write(timeoutEvt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
 				return
 			}
 			flusher.Flush()
@@ -186,7 +186,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			replayedUpTo = evt.ID
-			if _, err := w.Write(evt.MarshalSSE()); err != nil {
+			if _, err := w.Write(evt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
 				return
 			}
 			flusher.Flush()

@@ -27,7 +27,9 @@ jobs:
       - name: Module tidy check
         run: |
           go mod tidy
-          git diff --exit-status go.mod go.sum
+          # --exit-code (the canonical flag) is portable across git versions;
+          # `-- go.mod go.sum` forces pathspec form. Exits 1 if tidy changed them.
+          git diff --exit-code -- go.mod go.sum
 
       - name: Build
         run: go build ./...
@@ -62,9 +64,12 @@ jobs:
           cache: true
 
       - name: golangci-lint
-        # Pinned to v1.64.x: .golangci.yml uses the v1 config schema.
-        # (golangci-lint v2 changed the config format and would reject this file.)
+        # golangci-lint v2 (config schema v2 — see .golangci.yml). v1.64 was
+        # built with Go 1.24 and refuses to lint this module's go 1.25
+        # directive; v2 is built with Go 1.25+. Pinned to v2.12.2 — the
+        # release this config and codebase were verified against, so CI and
+        # local `golangci-lint run` lint identically.
         uses: golangci/golangci-lint-action@v6
         with:
-          version: v1.64.8
+          version: v2.12.2
           args: --timeout=5m

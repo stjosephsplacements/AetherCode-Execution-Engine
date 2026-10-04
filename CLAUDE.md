@@ -23,7 +23,7 @@ out the reasoning.
 ```bash
 make build      # build the engine binary (aethercode-exec)
 make test       # unit tests — hermetic (in-process miniredis, no services)
-make lint       # golangci-lint (v1 config schema; pinned to v1.64.x)
+make lint       # golangci-lint (v2 config schema; pinned to v2.12.2)
 make vet
 make fmt
 make e2e        # end-to-end suite against a running stack on :5100

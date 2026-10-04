@@ -236,8 +236,8 @@ func main() {
 	pubsub.Wait() // drain Subscribe goroutines before rdb.Close()
 
 	// Explicit ordered resource teardown: all consumers are gone before their pools close.
-	rdb.Close()
-	pool.Close()
+	rdb.Close()  //nolint:errcheck // best-effort: all consumers drained, so a close error is non-actionable at shutdown
+	pool.Close() //nolint:errcheck // best-effort: all consumers drained, so a close error is non-actionable at shutdown
 }
 
 func parseLogLevel(s string) slog.Level {

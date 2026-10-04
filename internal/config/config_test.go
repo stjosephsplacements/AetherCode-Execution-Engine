@@ -6,7 +6,8 @@ import (
 )
 
 func validConfig() Config {
-	return Config{
+	// Hermetic test fixture: the values below are dummies, not real credentials.
+	return Config{ //nolint:gosec // G101: dummy, non-secret values in a unit-test fixture
 		GatewayAddr:            "127.0.0.1:5100",
 		DatabaseURL:            "postgres://aethercode:aethercode@127.0.0.1:5433/aethercode_exec",
 		RedisAddr:              "127.0.0.1:6379",

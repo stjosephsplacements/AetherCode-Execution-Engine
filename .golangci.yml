@@ -1,42 +1,39 @@
-# golangci-lint configuration (v1 schema).
+version: "2"
+
+# golangci-lint v2 configuration.
 # Keep the linter set credible but not noisy: this engine deliberately runs
 # untrusted user code and has fail-open error paths, so a few security/error
 # linters are tuned down rather than fighting the design.
-run:
-  timeout: 5m
-
 linters:
   enable:
     - errcheck
     - govet
-    - staticcheck
-    - gosimple
+    - staticcheck # gosimple checks are folded into staticcheck in golangci-lint v2
     - unused
     - ineffassign
     - bodyclose
     - gosec
-
-linters-settings:
-  errcheck:
-    # Logging is intentionally fire-and-forget.
-    exclude-functions:
-      - fmt.Fprint
-      - fmt.Fprintf
-      - fmt.Fprintln
-      - fmt.Print
-      - fmt.Println
-      - fmt.Printf
-      - fmt.Sprintf
-  gosec:
-    excludes:
-      - G104 # unchecked errors — handled by errcheck, and fail-open is by design
-
-# The load generator is a throwaway benchmarking tool: it uses a fast
-# non-crypto PRNG and ignores stdout encode errors on purpose, so we don't
-# hold it to the production linters.
-issues:
-  exclude-rules:
-    - path: cmd/loadgen
-      linters:
-        - gosec
-        - errcheck
+  settings:
+    errcheck:
+      # Logging is intentionally fire-and-forget.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Print
+        - fmt.Println
+        - fmt.Printf
+        - fmt.Sprintf
+    gosec:
+      excludes:
+        - G104 # unchecked errors — handled by errcheck, and fail-open is by design
+  exclusions:
+    generated: lax
+    # The load generator is a throwaway benchmarking tool: it uses a fast
+    # non-crypto PRNG and ignores stdout encode errors on purpose, so we don't
+    # hold it to the production linters.
+    rules:
+      - path: cmd/loadgen
+        linters:
+          - gosec
+          - errcheck

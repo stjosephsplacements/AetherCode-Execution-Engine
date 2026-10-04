@@ -160,7 +160,7 @@ func InsertTestResults(ctx context.Context, pool *pgxpool.Pool, submissionID uui
 	}
 
 	br := pool.SendBatch(ctx, batch)
-	defer br.Close()
+	defer br.Close() //nolint:errcheck // pgx BatchResults.Close() is a no-op that always returns nil
 
 	var firstErr error
 	for i := range results {

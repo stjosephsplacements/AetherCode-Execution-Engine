@@ -8,7 +8,7 @@ security is high. Please read this before opening a PR.
 
 - **Go 1.25+**
 - **Docker + Docker Compose** (for the full dev stack)
-- Optionally **golangci-lint** (v1.64.x) if you don't want to lean on CI
+- Optionally **golangci-lint** (v2.12.2 — the version CI pins; config in `.golangci.yml`) if you don't want to lean on CI
 
 ## Getting started
 
