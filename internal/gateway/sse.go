@@ -32,6 +32,10 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, `{"error":"invalid job_id"}`, http.StatusBadRequest)
 		return
 	}
+	// Use the canonical string form derived from the parsed UUID for all
+	// downstream calls. This breaks the taint chain from the raw query
+	// parameter while keeping the value identical for any valid UUID input.
+	safeJobID := parsedJobID.String()
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -72,12 +76,12 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Subscribe FIRST to avoid race between replay and live events
-	eventCh := h.pubsub.Subscribe(ctx, jobID)
+	eventCh := h.pubsub.Subscribe(ctx, safeJobID)
 
 	// Replay stored events
-	events, err := h.pubsub.GetEventLog(ctx, jobID)
+	events, err := h.pubsub.GetEventLog(ctx, safeJobID)
 	if err != nil {
-		slog.Error("sse: get event log failed", "job_id", jobID, "err", err)
+		slog.Error("sse: get event log failed", "job_id", safeJobID, "err", err)
 	}
 
 	hasTerminal := false
@@ -112,7 +116,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 		case <-deadline.C:
 			// Check if a real verdict landed in the event log while we waited.
 			checkCtx, checkCancel := context.WithTimeout(context.Background(), 3*time.Second)
-			latestEvents, _ := h.pubsub.GetEventLog(checkCtx, jobID)
+			latestEvents, _ := h.pubsub.GetEventLog(checkCtx, safeJobID)
 			checkCancel()
 			for _, evt := range latestEvents {
 				if evt.IsTerminal() {
@@ -125,7 +129,7 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					if _, err := w.Write(evt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
-						slog.Warn("sse: write deadline terminal failed", "job_id", jobID, "err", err)
+						slog.Warn("sse: write deadline terminal failed", "job_id", safeJobID, "err", err)
 					}
 					flusher.Flush()
 					return
@@ -136,13 +140,13 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 			dbCtx, dbCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if sub, err := db.GetSubmission(dbCtx, h.pool, parsedJobID); err == nil {
 				if sub.Status == model.StatusCompleted || sub.Status == model.StatusFailed {
-					dbEvt := eventlog.New(jobID, eventlog.EventVerdict, map[string]any{
+					dbEvt := eventlog.New(safeJobID, eventlog.EventVerdict, map[string]any{
 						"verdict":      sub.Verdict,
 						"tests_passed": sub.TestsPassed,
 						"test_count":   sub.TestCount,
 					})
 					if _, err := w.Write(dbEvt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
-						slog.Warn("sse: write db verdict failed", "job_id", jobID, "err", err)
+						slog.Warn("sse: write db verdict failed", "job_id", safeJobID, "err", err)
 					}
 					flusher.Flush()
 					dbCancel()
@@ -151,13 +155,13 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 			}
 			dbCancel()
 
-			timeoutEvt := eventlog.New(jobID, eventlog.EventVerdict, map[string]any{
+			timeoutEvt := eventlog.New(safeJobID, eventlog.EventVerdict, map[string]any{
 				"verdict": "internal_error",
 				"error":   "no verdict within timeout",
 			})
 			pubCtx, pubCancel := context.WithTimeout(context.Background(), 3*time.Second)
 			if err := h.pubsub.PublishEvent(pubCtx, timeoutEvt); err != nil {
-				slog.Warn("sse: failed to persist timeout event", "job_id", jobID, "err", err)
+				slog.Warn("sse: failed to persist timeout event", "job_id", safeJobID, "err", err)
 			}
 			pubCancel()
 			if _, err := w.Write(timeoutEvt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
