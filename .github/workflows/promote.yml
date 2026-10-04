@@ -39,19 +39,17 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
-
       - name: Promote development -> testing -> staging; open staging -> production
         run: |
           set -euo pipefail
           REPO="${GITHUB_REPOSITORY}"
 
-          # Exit 0 when DST is behind SRC (SRC has commits DST lacks).
+          # Exit 0 when DST is behind SRC (SRC has commits DST lacks), checked
+          # via the compare API so we never depend on clone depth.
           behind() {
-            local src="$1" dst="$2" n
-            git fetch origin "$src" "$dst" --quiet
-            n="$(git rev-list --count "origin/${dst}..origin/${src}")"
-            [ "$n" -gt 0 ]
+            local src="$1" dst="$2" ahead
+            ahead="$(gh api "repos/${REPO}/compare/${dst}...${src}" --jq '.ahead_by')"
+            [ "${ahead:-0}" -gt 0 ]
           }
 
           # Wait (up to ~20 min) for a PR's checks to finish; return 1 on red.
@@ -74,7 +72,7 @@ jobs:
 
           # Open a PR src->dst, wait for green CI, merge (merge commit, keep head).
           promote() {
-            local src="$1" dst="$2" existing prnum
+            local src="$1" dst="$2" existing url prnum
             echo "==> ${src} -> ${dst}"
             if ! behind "$src" "$dst"; then
               echo "  ${dst} already contains ${src}; skipping"
@@ -82,17 +80,17 @@ jobs:
             fi
             existing="$(gh pr list --repo "$REPO" --state open --base "$dst" --head "$src" --json number --jq '.[].number' | head -n1 || true)"
             [ -n "${existing}" ] && { echo "  closing stale #${existing}"; gh pr close "$existing" --repo "$REPO" || true; }
-            prnum="$(gh pr create --repo "$REPO" --base "$dst" --head "$src" \
+            url="$(gh pr create --repo "$REPO" --base "$dst" --head "$src" \
               --title "promote: ${src} -> ${dst}" \
-              --body "Automatic promotion of ${src} to ${dst}." \
-              --json number --jq .number)"
+              --body "Automatic promotion of ${src} to ${dst}.")"
+            prnum="${url##*/}"
             echo "  opened PR #${prnum}"
             if ! wait_green "$prnum"; then
               echo "::error::${src} -> ${dst} failed CI"
               exit 1
             fi
             echo "  merging #${prnum}"
-            gh pr merge "$prnum" --repo "$REPO" --merge --no-delete-branch
+            gh pr merge "$prnum" --repo "$REPO" --merge
             echo "  merged ${src} -> ${dst}"
           }
 
@@ -111,8 +109,7 @@ jobs:
             fi
             url="$(gh pr create --repo "$REPO" --base "$dst" --head "$src" \
               --title "promote: ${src} -> ${dst}" \
-              --body "Automatic promotion of ${src} to ${dst}. **Requires an approving review from an org member before merge.**" \
-              --json url --jq .url)"
+              --body "Automatic promotion of ${src} to ${dst}. **Requires an approving review from an org member before merge.**.")"
             echo "  opened ${url}"
           }
 
