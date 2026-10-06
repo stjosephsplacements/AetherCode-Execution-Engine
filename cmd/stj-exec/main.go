@@ -134,7 +134,7 @@ func main() {
 
 	// HTTP Gateway
 	mux := http.NewServeMux()
-	h := gateway.NewHandler(pool, submitStream, runStream, pubsub, judge, rdb, rl, cfg.AdmissionMaxQueueDepth, cfg.TrustProxy)
+	h := gateway.NewHandler(pool, submitStream, runStream, pubsub, judge, rdb, rl, cfg.AdmissionMaxQueueDepth, cfg.TrustProxy, cfg.WorkerCount)
 	h.Register(mux)
 
 	var handler http.Handler = mux

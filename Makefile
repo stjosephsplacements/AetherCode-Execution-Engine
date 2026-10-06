@@ -1,6 +1,7 @@
 BINARY  := aethercode-exec
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 GOFLAGS ?= -trimpath
-LDFLAGS ?= -s -w
+LDFLAGS ?= -s -w -X github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/gateway.Version=$(VERSION)
 
 .PHONY: help build test vet lint fmt e2e loadgen up down clean
 

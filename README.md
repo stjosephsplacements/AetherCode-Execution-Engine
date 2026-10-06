@@ -323,15 +323,39 @@ data: {
 
 ### GET /api/v1/health
 
-Returns the health of all subsystems.
+Returns the health of all subsystems along with version, uptime, worker, and
+queue information.
 
-**Response `200 OK`**
+**Response `200 OK`** (all subsystems healthy)
 
 ```json
-{ "database": "ok", "sandbox": "ok", "redis": "ok" }
+{
+  "status": "healthy",
+  "version": "v0.1.0",
+  "go_version": "go1.25.0",
+  "uptime_seconds": 3612,
+  "checks": {
+    "database": "ok",
+    "sandbox": "ok",
+    "redis": "ok"
+  },
+  "sandbox_version": "1.13.0",
+  "workers": {
+    "active": 3,
+    "configured": 8
+  },
+  "queues": {
+    "ac:submissions:submit": 12,
+    "ac:submissions:run": 0
+  }
+}
 ```
 
-Returns `503` if any subsystem is degraded.
+| Status | Meaning | HTTP code |
+|---|---|---|
+| `healthy` | All checks pass | 200 |
+| `degraded` | Sandbox or Redis unreachable, database still up | 200 |
+| `unhealthy` | Database unreachable | 503 |
 
 ---
 
