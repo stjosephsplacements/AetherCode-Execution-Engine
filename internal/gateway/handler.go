@@ -7,11 +7,13 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/redis/go-redis/v9"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/auth"
@@ -24,6 +26,9 @@ import (
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
 
+// Version is set at build time via ldflags.
+var Version = "dev"
+
 type Handler struct {
 	pool                   *pgxpool.Pool
 	submitStream           *queue.Stream
@@ -35,9 +40,11 @@ type Handler struct {
 	admissionMaxQueueDepth int
 	trustProxy             bool
 	ingestSem              chan struct{}
+	startTime              time.Time
+	workerCount            int
 }
 
-func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, trustProxy bool) *Handler {
+func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, trustProxy bool, workerCount int) *Handler {
 	return &Handler{
 		pool:                   pool,
 		submitStream:           submitStream,
@@ -49,6 +56,8 @@ func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsu
 		admissionMaxQueueDepth: admissionMaxQueueDepth,
 		trustProxy:             trustProxy,
 		ingestSem:              make(chan struct{}, 64),
+		startTime:              time.Now(),
+		workerCount:            workerCount,
 	}
 }
 
@@ -280,41 +289,96 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(executeResponse{JobID: jobID.String()}) //nolint:errcheck // best-effort: write the submission response
 }
 
+type healthResponse struct {
+	Status         string            `json:"status"`
+	Version        string            `json:"version"`
+	GoVersion      string            `json:"go_version"`
+	UptimeSeconds  int               `json:"uptime_seconds"`
+	Checks         map[string]string `json:"checks"`
+	SandboxVersion string            `json:"sandbox_version,omitempty"`
+	Workers        workerInfo        `json:"workers"`
+	Queues         map[string]int64  `json:"queues"`
+}
+
+type workerInfo struct {
+	Active     int `json:"active"`
+	Configured int `json:"configured"`
+}
+
 func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 	defer cancel()
-	status := map[string]string{}
-	healthy := true
+
+	checks := map[string]string{}
+	dbOK, sandboxOK, redisOK := true, true, true
 
 	if err := h.pool.Ping(ctx); err != nil {
 		slog.Error("health: database check failed", "err", err)
-		status["database"] = "error"
-		healthy = false
+		checks["database"] = "error"
+		dbOK = false
 	} else {
-		status["database"] = "ok"
+		checks["database"] = "ok"
 	}
 
-	if err := h.judge.Ping(ctx); err != nil {
+	var sandboxVersion string
+	if ver, err := h.judge.Version(ctx); err != nil {
 		slog.Error("health: sandbox check failed", "err", err)
-		status["sandbox"] = "error"
-		healthy = false
+		checks["sandbox"] = "error"
+		sandboxOK = false
 	} else {
-		status["sandbox"] = "ok"
+		checks["sandbox"] = "ok"
+		sandboxVersion = ver
 	}
 
 	if err := h.rdb.Ping(ctx).Err(); err != nil {
 		slog.Error("health: redis check failed", "err", err)
-		status["redis"] = "error"
-		healthy = false
+		checks["redis"] = "error"
+		redisOK = false
 	} else {
-		status["redis"] = "ok"
+		checks["redis"] = "ok"
+	}
+
+	queues := map[string]int64{}
+	for _, s := range []*queue.Stream{h.submitStream, h.runStream} {
+		name := s.StreamName()
+		length, err := h.rdb.XLen(ctx, name).Result()
+		if err == nil {
+			queues[name] = length
+		}
+	}
+
+	overall := "healthy"
+	httpStatus := http.StatusOK
+	if !dbOK {
+		overall = "unhealthy"
+		httpStatus = http.StatusServiceUnavailable
+	} else if !sandboxOK || !redisOK {
+		overall = "degraded"
+	}
+
+	var activeWorkers int
+	var m dto.Metric
+	if err := metrics.ActiveWorkers.Write(&m); err == nil {
+		activeWorkers = int(m.GetGauge().GetValue())
+	}
+
+	resp := healthResponse{
+		Status:         overall,
+		Version:        Version,
+		GoVersion:      runtime.Version(),
+		UptimeSeconds:  int(time.Since(h.startTime).Seconds()),
+		Checks:         checks,
+		SandboxVersion: sandboxVersion,
+		Workers: workerInfo{
+			Active:     activeWorkers,
+			Configured: h.workerCount,
+		},
+		Queues: queues,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	if !healthy {
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}
-	json.NewEncoder(w).Encode(status) //nolint:errcheck // best-effort: write the health status
+	w.WriteHeader(httpStatus)
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck // best-effort: write the health status
 }
 
 func jsonError(w http.ResponseWriter, msg string, code int) {

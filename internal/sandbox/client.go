@@ -77,21 +77,38 @@ func (c *Client) Run(ctx context.Context, req Request) ([]Result, error) {
 
 // Ping checks connectivity to go-judge by hitting /version.
 func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.Version(ctx)
+	return err
+}
+
+// Version returns the go-judge build version string by calling GET /version.
+func (c *Client) Version(ctx context.Context) (string, error) {
 	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+"/version", nil)
 	if err != nil {
-		return err
+		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.authToken)
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("sandbox: ping failed: %w", err)
+		return "", fmt.Errorf("sandbox: version request failed: %w", err)
 	}
-	defer resp.Body.Close()        //nolint:errcheck // best-effort: the http client reuses pooled connections
-	io.Copy(io.Discard, resp.Body) //nolint:errcheck // best-effort: drain body so the connection can be reused
+	defer resp.Body.Close() //nolint:errcheck // best-effort: the http client reuses pooled connections
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<16))
+	if err != nil {
+		return "", fmt.Errorf("sandbox: read version response: %w", err)
+	}
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("sandbox: ping returned HTTP %d", resp.StatusCode)
+		return "", fmt.Errorf("sandbox: version returned HTTP %d", resp.StatusCode)
 	}
-	return nil
+
+	var ver struct {
+		BuildVersion string `json:"buildVersion"`
+	}
+	if err := json.Unmarshal(body, &ver); err != nil {
+		return "", fmt.Errorf("sandbox: unmarshal version: %w", err)
+	}
+	return ver.BuildVersion, nil
 }
 
 // --- Request/Response types matching go-judge REST API ---
