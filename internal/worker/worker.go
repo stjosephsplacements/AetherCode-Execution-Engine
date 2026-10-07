@@ -20,20 +20,24 @@ import (
 )
 
 type Worker struct {
-	pool       *pgxpool.Pool
-	judge      *sandbox.Client
-	consumer   *queue.DualConsumer
-	pubsub     *queue.PubSub
-	jobTimeout time.Duration
+	pool            *pgxpool.Pool
+	judge           *sandbox.Client
+	consumer        *queue.DualConsumer
+	pubsub          *queue.PubSub
+	jobTimeout      time.Duration
+	testParallelism int
+	cc              *compileCache
 }
 
-func New(pool *pgxpool.Pool, judge *sandbox.Client, consumer *queue.DualConsumer, pubsub *queue.PubSub, jobTimeout time.Duration) *Worker {
+func New(pool *pgxpool.Pool, judge *sandbox.Client, consumer *queue.DualConsumer, pubsub *queue.PubSub, jobTimeout time.Duration, testParallelism int, compileCacheTTL time.Duration) *Worker {
 	return &Worker{
-		pool:       pool,
-		judge:      judge,
-		consumer:   consumer,
-		pubsub:     pubsub,
-		jobTimeout: jobTimeout,
+		pool:            pool,
+		judge:           judge,
+		consumer:        consumer,
+		pubsub:          pubsub,
+		jobTimeout:      jobTimeout,
+		testParallelism: max(testParallelism, 1),
+		cc:              newCompileCache(compileCacheTTL),
 	}
 }
 
@@ -55,6 +59,22 @@ func (w *Worker) Start(ctx context.Context, n int, wg *sync.WaitGroup) {
 				}
 				slog.Warn("restarting worker after panic", "worker", consumer)
 				time.Sleep(time.Second)
+			}
+		}()
+	}
+	if w.cc.ttl > 0 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(w.cc.ttl)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					w.cc.evictExpired()
+				}
 			}
 		}()
 	}
@@ -118,7 +138,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	defer func() { metrics.JobProcessingDuration.Observe(time.Since(start).Seconds()) }()
 
 	// Load tests from the appropriate source
-	tests, err := w.loadTests(jobCtx, sub)
+	tests, limits, err := w.loadTests(jobCtx, sub)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("load tests: %v", err), log)
 	}
@@ -129,6 +149,15 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	lang, ok := sandbox.Languages[sub.Language]
 	if !ok {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("unknown language: %s", sub.Language), log)
+	}
+
+	// With batched execution the wall-clock budget is the slowest single test
+	// (they run in parallel), not the sum. Keep the serial budget as a safe upper
+	// bound so the context doesn't expire prematurely on large test sets.
+	if budget := jobBudget(lang, limits, len(tests)); budget > w.jobTimeout {
+		extendedCtx, extendedCancel := context.WithTimeout(ctx, budget)
+		defer extendedCancel()
+		jobCtx = extendedCtx
 	}
 
 	// Compile step (for compiled languages)
@@ -145,24 +174,31 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 			log.Warn("failed to publish COMPILING event", "err", err)
 		}
 
-		compileResult, err := w.compile(jobCtx, lang, sub.SourceCode)
-		if err != nil {
-			return w.failSubmission(jobCtx, id, model.VerdictInternalError, err.Error(), log)
-		}
+		cacheKey := compileCacheKey(sub.Language, sub.SourceCode)
+		if cached, hit := w.cc.get(cacheKey); hit {
+			fileID = cached
+			log.Info("compile cache hit", "fileId", fileID)
+		} else {
+			compileResult, err := w.compile(jobCtx, lang, sub.SourceCode)
+			if err != nil {
+				return w.failSubmission(jobCtx, id, model.VerdictInternalError, err.Error(), log)
+			}
 
-		if compileResult.Status != sandbox.StatusAccepted {
-			stderr := compileResult.Files["stderr"]
-			return w.failSubmission(jobCtx, id, model.VerdictCompilationError, stderr, log)
-		}
+			if compileResult.Status != sandbox.StatusAccepted {
+				stderr := compileResult.Files["stderr"]
+				return w.failSubmission(jobCtx, id, model.VerdictCompilationError, stderr, log)
+			}
 
-		for _, fid := range compileResult.FileIDs {
-			fileID = fid
-			break
+			for _, fid := range compileResult.FileIDs {
+				fileID = fid
+				break
+			}
+			if fileID == "" {
+				return w.failSubmission(jobCtx, id, model.VerdictInternalError, "no cached file returned from compile", log)
+			}
+			w.cc.put(cacheKey, fileID)
+			log.Info("compiled", "fileId", fileID)
 		}
-		if fileID == "" {
-			return w.failSubmission(jobCtx, id, model.VerdictInternalError, "no cached file returned from compile", log)
-		}
-		log.Info("compiled", "fileId", fileID)
 	}
 
 	// Run tests — only update status if we went through the compile phase
@@ -180,46 +216,9 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		log.Warn("failed to publish RUNNING event", "err", err)
 	}
 
-	var results []model.TestResult
-	var totalCPU, peakMem int64
-	overallVerdict := model.VerdictAccepted
-	passed := 0
-
-	for i, tc := range tests {
-		if jobCtx.Err() != nil {
-			log.Warn("job context expired, skipping remaining tests", "completed", i, "total", len(tests))
-			for j := i; j < len(tests); j++ {
-				results = append(results, model.TestResult{
-					TestIndex: j,
-					Verdict:   model.VerdictInternalError,
-				})
-			}
-			if overallVerdict == model.VerdictAccepted {
-				overallVerdict = model.VerdictInternalError
-			}
-			break
-		}
-
-		tr, err := w.runTest(jobCtx, lang, sub.SourceCode, tc, fileID, i)
-		if err != nil {
-			log.Error("test execution error", "test", i, "err", err)
-			tr = model.TestResult{
-				TestIndex: i,
-				Verdict:   model.VerdictInternalError,
-			}
-		}
-
-		results = append(results, tr)
-		totalCPU += tr.CPUTimeNs
-		if tr.MemoryBytes > peakMem {
-			peakMem = tr.MemoryBytes
-		}
-
-		if tr.Verdict == model.VerdictAccepted {
-			passed++
-		} else if overallVerdict == model.VerdictAccepted {
-			overallVerdict = tr.Verdict
-		}
+	results, totalCPU, peakMem, passed, overallVerdict, err := w.runTestsBatched(jobCtx, submissionID, lang, sub.SourceCode, tests, fileID, limits, log)
+	if err != nil {
+		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("batch run: %v", err), log)
 	}
 
 	// writeCtx survives signal cancellation so DB writes complete during graceful shutdown.
@@ -227,18 +226,14 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer writeCancel()
 
-	if err := db.InsertTestResults(writeCtx, w.pool, id, results); err != nil {
-		return fmt.Errorf("worker: insert test results: %w", err)
-	}
-
-	if err := db.UpdateSubmissionVerdict(writeCtx, w.pool, id,
+	if err := db.InsertResultsAndVerdict(writeCtx, w.pool, id, results,
 		model.StatusCompleted, overallVerdict, "",
 		totalCPU, peakMem, len(tests), passed); err != nil {
 		if strings.Contains(err.Error(), "verdict already written") {
 			log.Warn("duplicate execution detected, verdict already persisted")
 			return nil
 		}
-		return fmt.Errorf("worker: update verdict: %w", err)
+		return fmt.Errorf("worker: write results+verdict: %w", err)
 	}
 
 	// Build verdict event data — filter hidden test output for submit mode
@@ -255,6 +250,12 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		if !isSubmitMode || (i < len(tests) && tests[i].IsSample) {
 			entry["stdout_preview"] = db.Truncate(r.StdoutPreview, 256)
 			entry["stderr_preview"] = db.Truncate(r.StderrPreview, 256)
+		}
+		// Run-mode callers (an exam server grading with its own checker) need the
+		// complete output, not a preview; it is bounded by the sandbox output limit.
+		if !isSubmitMode {
+			entry["stdout"] = r.StdoutPreview
+			entry["stderr"] = r.StderrPreview
 		}
 		eventResults[i] = entry
 	}
@@ -277,11 +278,11 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	return nil
 }
 
-func (w *Worker) loadTests(ctx context.Context, sub *model.Submission) ([]testData, error) {
+func (w *Worker) loadTests(ctx context.Context, sub *model.Submission) ([]testData, sandbox.RunLimits, error) {
 	if sub.Mode == string(model.ModeSubmit) && sub.ProblemVersionID != nil {
 		tcs, err := db.GetTestCases(ctx, w.pool, *sub.ProblemVersionID)
 		if err != nil {
-			return nil, err
+			return nil, sandbox.RunLimits{}, err
 		}
 		tests := make([]testData, len(tcs))
 		for i, tc := range tcs {
@@ -291,13 +292,13 @@ func (w *Worker) loadTests(ctx context.Context, sub *model.Submission) ([]testDa
 				IsSample:       tc.IsSample,
 			}
 		}
-		return tests, nil
+		return tests, sandbox.RunLimits{}, nil
 	}
 
-	// Run mode: tests from Redis
-	redisTests, err := w.pubsub.GetTests(ctx, sub.ID.String())
+	// Run mode: tests and limits from Redis
+	redisTests, limits, err := w.pubsub.GetTests(ctx, sub.ID.String())
 	if err != nil {
-		return nil, err
+		return nil, sandbox.RunLimits{}, err
 	}
 	tests := make([]testData, len(redisTests))
 	for i, rt := range redisTests {
@@ -307,7 +308,18 @@ func (w *Worker) loadTests(ctx context.Context, sub *model.Submission) ([]testDa
 			IsSample:       true, // all client-supplied tests are visible
 		}
 	}
-	return tests, nil
+	return tests, limits, nil
+}
+
+// jobBudget is the worst-case time a job needs: compiling plus every test
+// running to its wall-clock limit, with slack for sandbox and DB round trips.
+func jobBudget(lang sandbox.LangConfig, limits sandbox.RunLimits, tests int) time.Duration {
+	cpu, _ := lang.Effective(limits)
+	total := sandbox.ClockLimit(cpu) * uint64(tests)
+	if lang.Compiled {
+		total += sandbox.ClockLimit(lang.CompileCPU)
+	}
+	return time.Duration(total) + 15*time.Second
 }
 
 func (w *Worker) compile(ctx context.Context, lang sandbox.LangConfig, sourceCode string) (*sandbox.Result, error) {
@@ -322,17 +334,96 @@ func (w *Worker) compile(ctx context.Context, lang sandbox.LangConfig, sourceCod
 	return &results[0], nil
 }
 
-func (w *Worker) runTest(ctx context.Context, lang sandbox.LangConfig, sourceCode string, tc testData, fileID string, testIndex int) (model.TestResult, error) {
-	cmd := sandbox.BuildRunCmd(lang, sourceCode, tc.Input, fileID)
-	results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cmd}})
-	if err != nil {
-		return model.TestResult{TestIndex: testIndex, Verdict: model.VerdictInternalError}, err
-	}
-	if len(results) == 0 {
-		return model.TestResult{TestIndex: testIndex, Verdict: model.VerdictInternalError}, fmt.Errorf("empty response")
+// maxBatchSize caps the number of test Cmds sent in a single go-judge /run call.
+// go-judge runs them in parallel up to its -parallelism flag; sending too many
+// in one request risks OOM or long response times. Excess tests are sent in
+// subsequent batches.
+const maxBatchSize = 32
+
+// runTestsBatched sends all tests to go-judge in batched /run calls instead of
+// one HTTP round-trip per test. go-judge executes the Cmds in the batch in
+// parallel (up to its -parallelism setting), so a 10-test submission that took
+// 10 sequential round-trips now completes in ~1 round-trip wall-clock time.
+func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox.LangConfig, sourceCode string, tests []testData, fileID string, limits sandbox.RunLimits, log *slog.Logger) (results []model.TestResult, totalCPU, peakMem int64, passed int, overallVerdict model.Verdict, err error) {
+	overallVerdict = model.VerdictAccepted
+	results = make([]model.TestResult, 0, len(tests))
+
+	// For interpreted languages with multiple tests, pre-cache the source file
+	// so each test Cmd uses a fileID reference instead of embedding the full source.
+	if !lang.Compiled && !lang.StdinIsSource && fileID == "" && len(tests) > 1 {
+		cacheCmd := sandbox.BuildCacheSourceCmd(lang, sourceCode)
+		cacheResults, cacheErr := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
+		if cacheErr == nil && len(cacheResults) == 1 && cacheResults[0].Status == sandbox.StatusAccepted {
+			for _, fid := range cacheResults[0].FileIDs {
+				fileID = fid
+				break
+			}
+			if fileID != "" {
+				log.Debug("cached interpreted source", "fileId", fileID)
+			}
+		}
+		// Non-fatal: falls back to inlining source in each Cmd
 	}
 
-	r := results[0]
+	for batchStart := 0; batchStart < len(tests); batchStart += maxBatchSize {
+		if ctx.Err() != nil {
+			log.Warn("job context expired, skipping remaining tests", "completed", batchStart, "total", len(tests))
+			for j := batchStart; j < len(tests); j++ {
+				results = append(results, model.TestResult{TestIndex: j, Verdict: model.VerdictInternalError})
+			}
+			if overallVerdict == model.VerdictAccepted {
+				overallVerdict = model.VerdictInternalError
+			}
+			return results, totalCPU, peakMem, passed, overallVerdict, nil
+		}
+
+		batchEnd := min(batchStart+maxBatchSize, len(tests))
+		batch := tests[batchStart:batchEnd]
+
+		cmds := make([]sandbox.Cmd, len(batch))
+		for i, tc := range batch {
+			cmds[i] = sandbox.BuildRunCmd(lang, sourceCode, tc.Input, fileID, limits)
+		}
+
+		batchResults, runErr := w.judge.Run(ctx, sandbox.Request{Cmd: cmds})
+		if runErr != nil {
+			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run (tests %d-%d): %w", batchStart, batchEnd-1, runErr)
+		}
+		if len(batchResults) != len(batch) {
+			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run: expected %d results, got %d", len(batch), len(batchResults))
+		}
+
+		for i, r := range batchResults {
+			testIndex := batchStart + i
+			tr := judgeResult(r, testIndex, batch[i].ExpectedOutput)
+			results = append(results, tr)
+			totalCPU += tr.CPUTimeNs
+			if tr.MemoryBytes > peakMem {
+				peakMem = tr.MemoryBytes
+			}
+			if tr.Verdict == model.VerdictAccepted {
+				passed++
+			} else if overallVerdict == model.VerdictAccepted {
+				overallVerdict = tr.Verdict
+			}
+		}
+
+		if err := w.pubsub.PublishEvent(ctx, eventlog.New(jobID, eventlog.EventTestResult, map[string]any{
+			"completed":  batchEnd,
+			"total":      len(tests),
+			"passed":     passed,
+			"batch_from": batchStart,
+			"batch_to":   batchEnd - 1,
+		})); err != nil {
+			log.Warn("failed to publish TEST_RESULT event", "err", err)
+		}
+	}
+
+	return results, totalCPU, peakMem, passed, overallVerdict, nil
+}
+
+// judgeResult converts a single go-judge sandbox.Result into a model.TestResult.
+func judgeResult(r sandbox.Result, testIndex int, expectedOutput string) model.TestResult {
 	tr := model.TestResult{
 		TestIndex:     testIndex,
 		CPUTimeNs:     int64(r.Time),   //nolint:gosec // go-judge reports CPU time in ns (non-negative)
@@ -343,7 +434,7 @@ func (w *Worker) runTest(ctx context.Context, lang sandbox.LangConfig, sourceCod
 
 	switch r.Status {
 	case sandbox.StatusAccepted:
-		tr.Verdict = JudgeOutput(tc.ExpectedOutput, r.Files["stdout"])
+		tr.Verdict = JudgeOutput(expectedOutput, r.Files["stdout"])
 	case sandbox.StatusTimeLimitEx:
 		tr.Verdict = model.VerdictTimeLimitEx
 	case sandbox.StatusMemoryLimitEx:
@@ -356,7 +447,7 @@ func (w *Worker) runTest(ctx context.Context, lang sandbox.LangConfig, sourceCod
 		tr.Verdict = model.VerdictInternalError
 	}
 
-	return tr, nil
+	return tr
 }
 
 const maxStderrBytes = 4096

@@ -45,3 +45,11 @@ First open-source release.
 ### Added
 
 - (nothing yet)
+
+## Unreleased
+
+- Run mode accepts `time_limit_ms` and `memory_limit_kb`; runs also get a wall-clock limit (2x CPU + 1 s).
+- Run-mode VERDICT results include the complete `stdout`/`stderr`; test data up to 8 MB, output up to 8 MB.
+- Job deadline grows to the worst case of its tests and limits instead of cutting off late tests.
+- Unauthenticated requests are no longer rate limited by IP; `AC_TRUST_PROXY` is removed.
+- Output comparison treats CRLF and lone CR as line breaks.

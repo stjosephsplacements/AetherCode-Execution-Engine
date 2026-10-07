@@ -35,7 +35,6 @@ type Config struct {
 	CORSAllowedOrigins string
 
 	// Reverse proxy
-	TrustProxy bool
 
 	// Fair queuing
 	SubmitStreamName string
@@ -44,6 +43,17 @@ type Config struct {
 
 	// Timeouts
 	JobTimeout time.Duration
+
+	// Worker tuning
+	TestParallelism int
+	CompileCacheTTL time.Duration
+
+	// Queue tuning
+	BlockReadTimeout time.Duration
+
+	// Go runtime tuning
+	GOGC        int
+	GOMEMLIMIT  int64
 }
 
 func Load() Config {
@@ -69,13 +79,19 @@ func Load() Config {
 		AdmissionMaxQueueDepth: envInt("AC_ADMISSION_MAX_QUEUE_DEPTH", 5000),
 
 		CORSAllowedOrigins: env("AC_CORS_ALLOWED_ORIGINS", ""),
-		TrustProxy:         envBool("AC_TRUST_PROXY", false),
 
 		SubmitStreamName: env("AC_SUBMIT_STREAM", "ac:submissions:submit"),
 		RunStreamName:    env("AC_RUN_STREAM", "ac:submissions:run"),
 		SubmitWeight:     envInt("AC_SUBMIT_WEIGHT", 3),
 
 		JobTimeout: envDuration("AC_JOB_TIMEOUT", 90*time.Second),
+
+		TestParallelism:  envInt("AC_TEST_PARALLELISM", 4),
+		CompileCacheTTL:  envDuration("AC_COMPILE_CACHE_TTL", 60*time.Second),
+		BlockReadTimeout: envDuration("AC_BLOCK_READ_TIMEOUT", 500*time.Millisecond),
+
+		GOGC:       envInt("AC_GOGC", 200),
+		GOMEMLIMIT: envInt64("AC_GOMEMLIMIT", 0),
 	}
 }
 
@@ -99,6 +115,11 @@ func (c Config) Validate() error {
 	check(c.JudgeToken != "", "JudgeToken (AC_JUDGE_TOKEN) is required")
 	check(c.JudgeToken != "stj-spike-2024", "JudgeToken must not use the development default value")
 	check(c.JobTimeout > 0, "JobTimeout must be > 0")
+	check(c.TestParallelism > 0 && c.TestParallelism <= 64, "TestParallelism must be 1-64")
+	check(c.CompileCacheTTL >= 0, "CompileCacheTTL must be >= 0")
+	check(c.BlockReadTimeout >= 100*time.Millisecond && c.BlockReadTimeout <= 10*time.Second, "BlockReadTimeout must be 100ms-10s")
+	check(c.GOGC >= 50 && c.GOGC <= 1000, "GOGC must be 50-1000")
+	check(c.GOMEMLIMIT >= 0, "GOMEMLIMIT must be >= 0")
 
 	if c.AuthEnabled && c.OIDCAudience == "" {
 		errs = append(errs, "OIDCAudience (AC_OIDC_AUDIENCE) is required when auth is enabled")
@@ -126,6 +147,18 @@ func envInt(key string, fallback int) int {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "config: %s=%q is not a valid integer, using default %d\n", key, v, fallback)
+			return fallback
+		}
+		return n
+	}
+	return fallback
+}
+
+func envInt64(key string, fallback int64) int64 {
+	if v := os.Getenv(key); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "config: %s=%q is not a valid int64, using default %d\n", key, v, fallback)
 			return fallback
 		}
 		return n

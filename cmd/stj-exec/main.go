@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
+	"runtime/debug"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"os"
@@ -44,6 +45,14 @@ func main() {
 		logHandler = slog.NewJSONHandler(os.Stderr, logOpts)
 	}
 	slog.SetDefault(slog.New(logHandler))
+
+	// Apply Go runtime tuning before any goroutines are spawned.
+	prev := debug.SetGCPercent(cfg.GOGC)
+	slog.Debug("gc tuning", "GOGC", cfg.GOGC, "previous", prev)
+	if cfg.GOMEMLIMIT > 0 {
+		debug.SetMemoryLimit(cfg.GOMEMLIMIT)
+		slog.Debug("gc tuning", "GOMEMLIMIT", cfg.GOMEMLIMIT)
+	}
 
 	slog.Info("aethercode-exec starting",
 		"gateway", cfg.GatewayAddr,
@@ -92,7 +101,7 @@ func main() {
 	submitStream := queue.NewStream(rdb, cfg.SubmitStreamName, cfg.ConsumerGroup)
 	runStream := queue.NewStream(rdb, cfg.RunStreamName, cfg.ConsumerGroup)
 
-	dualConsumer := queue.NewDualConsumer(rdb, cfg.SubmitStreamName, cfg.RunStreamName, cfg.ConsumerGroup, cfg.SubmitWeight)
+	dualConsumer := queue.NewDualConsumer(rdb, cfg.SubmitStreamName, cfg.RunStreamName, cfg.ConsumerGroup, cfg.SubmitWeight, cfg.BlockReadTimeout)
 	if err := dualConsumer.CreateGroups(ctx); err != nil {
 		slog.Error("redis stream group creation failed", "err", err)
 		os.Exit(1)
@@ -105,7 +114,7 @@ func main() {
 
 	// Workers (dual-consumer weighted fair queuing)
 	var workerWg sync.WaitGroup
-	w := worker.New(pool, judge, dualConsumer, pubsub, cfg.JobTimeout)
+	w := worker.New(pool, judge, dualConsumer, pubsub, cfg.JobTimeout, cfg.TestParallelism, cfg.CompileCacheTTL)
 	w.Start(ctx, cfg.WorkerCount, &workerWg)
 
 	// Reclaimer — picks up stuck messages every 30s
@@ -134,7 +143,7 @@ func main() {
 
 	// HTTP Gateway
 	mux := http.NewServeMux()
-	h := gateway.NewHandler(pool, submitStream, runStream, pubsub, judge, rdb, rl, cfg.AdmissionMaxQueueDepth, cfg.TrustProxy)
+	h := gateway.NewHandler(pool, submitStream, runStream, pubsub, judge, rdb, rl, cfg.AdmissionMaxQueueDepth)
 	h.Register(mux)
 
 	var handler http.Handler = mux

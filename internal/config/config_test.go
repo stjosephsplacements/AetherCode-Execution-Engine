@@ -14,6 +14,7 @@ func validConfig() Config {
 		JudgeURL:               "http://127.0.0.1:5050",
 		JudgeToken:             "a-secret-token",
 		WorkerCount:            8,
+		TestParallelism:        4,
 		StreamName:             "ac:submissions",
 		ConsumerGroup:          "workers",
 		AdmissionMaxQueueDepth: 5000,
@@ -21,6 +22,10 @@ func validConfig() Config {
 		RateLimitBurst:         10,
 		SubmitWeight:           3,
 		JobTimeout:             90 * time.Second,
+		CompileCacheTTL:        60 * time.Second,
+		BlockReadTimeout:       500 * time.Millisecond,
+		GOGC:                   200,
+		GOMEMLIMIT:             0,
 	}
 }
 

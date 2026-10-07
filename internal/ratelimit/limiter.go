@@ -63,11 +63,6 @@ func (l *Limiter) Check(ctx context.Context, userID uuid.UUID) Result {
 	return l.check(ctx, fmt.Sprintf("ac:ratelimit:%s", userID))
 }
 
-// CheckIP tests whether an IP may submit (for unauthenticated requests).
-func (l *Limiter) CheckIP(ctx context.Context, ip string) Result {
-	return l.check(ctx, fmt.Sprintf("ac:ratelimit:ip:%s", ip))
-}
-
 func (l *Limiter) check(ctx context.Context, key string) Result {
 	nowMs := time.Now().UnixMilli()
 

@@ -2,7 +2,7 @@ package eventlog
 
 import (
 	"encoding/json"
-	"fmt"
+	"strconv"
 	"sync/atomic"
 	"time"
 )
@@ -10,10 +10,11 @@ import (
 type EventType string
 
 const (
-	EventQueued    EventType = "QUEUED"
-	EventCompiling EventType = "COMPILING"
-	EventRunning   EventType = "RUNNING"
-	EventVerdict   EventType = "VERDICT"
+	EventQueued     EventType = "QUEUED"
+	EventCompiling  EventType = "COMPILING"
+	EventRunning    EventType = "RUNNING"
+	EventTestResult EventType = "TEST_RESULT"
+	EventVerdict    EventType = "VERDICT"
 )
 
 type Event struct {
@@ -30,7 +31,16 @@ func (e Event) IsTerminal() bool {
 
 func (e Event) MarshalSSE() []byte {
 	data, _ := json.Marshal(e)
-	return []byte(fmt.Sprintf("id: %s\nevent: %s\ndata: %s\n\n", e.ID, e.Type, data))
+	// Pre-size: "id: " + id + "\nevent: " + type + "\ndata: " + data + "\n\n"
+	buf := make([]byte, 0, 4+len(e.ID)+8+len(e.Type)+7+len(data)+2)
+	buf = append(buf, "id: "...)
+	buf = append(buf, e.ID...)
+	buf = append(buf, "\nevent: "...)
+	buf = append(buf, e.Type...)
+	buf = append(buf, "\ndata: "...)
+	buf = append(buf, data...)
+	buf = append(buf, "\n\n"...)
+	return buf
 }
 
 var (
@@ -41,8 +51,9 @@ var (
 
 func New(jobID string, typ EventType, data any) Event {
 	seq := seqCounter.Add(1)
+	id := jobID + ":" + strconv.FormatInt(processEpoch, 10) + "-" + strconv.FormatInt(seq, 10)
 	return Event{
-		ID:        fmt.Sprintf("%s:%d-%d", jobID, processEpoch, seq),
+		ID:        id,
 		JobID:     jobID,
 		Type:      typ,
 		Data:      data,

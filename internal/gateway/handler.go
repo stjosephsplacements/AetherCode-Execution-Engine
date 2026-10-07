@@ -33,11 +33,10 @@ type Handler struct {
 	rdb                    *redis.Client
 	rateLimiter            *ratelimit.Limiter
 	admissionMaxQueueDepth int
-	trustProxy             bool
 	ingestSem              chan struct{}
 }
 
-func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, trustProxy bool) *Handler {
+func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, admissionMaxQueueDepth int) *Handler {
 	return &Handler{
 		pool:                   pool,
 		submitStream:           submitStream,
@@ -47,8 +46,7 @@ func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsu
 		rdb:                    rdb,
 		rateLimiter:            rateLimiter,
 		admissionMaxQueueDepth: admissionMaxQueueDepth,
-		trustProxy:             trustProxy,
-		ingestSem:              make(chan struct{}, 64),
+		ingestSem:              make(chan struct{}, 512),
 	}
 }
 
@@ -65,6 +63,9 @@ type executeRequest struct {
 	ProblemVersionID *string     `json:"problem_version_id"`
 	IdempotencyKey   *string     `json:"idempotency_key"`
 	Tests            []testInput `json:"tests"`
+	// Optional run-mode limits; omitted means the language defaults.
+	TimeLimitMs   *uint64 `json:"time_limit_ms"`
+	MemoryLimitKb *uint64 `json:"memory_limit_kb"`
 }
 
 type testInput struct {
@@ -78,7 +79,8 @@ type executeResponse struct {
 
 const maxSourceSize = 64 * 1024 // 64KB
 const maxTests = 100
-const maxTestDataSize = 64 * 1024 // 64KB per test input/output
+const maxTestDataSize = 8 << 20 // 8MB per test input/output
+const maxBodySize = 64 << 20    // whole request
 
 func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	ct := r.Header.Get("Content-Type")
@@ -97,7 +99,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1MB total body limit
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 
 	var req executeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -165,29 +167,40 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		}
 		for _, t := range req.Tests {
 			if len(t.Input) > maxTestDataSize || len(t.ExpectedOutput) > maxTestDataSize {
-				jsonError(w, "test input/output exceeds 64KB", http.StatusBadRequest)
+				jsonError(w, "test input/output exceeds 8MB", http.StatusBadRequest)
 				return
 			}
 		}
 	}
 
-	// Rate limiting
-	var rlResult ratelimit.Result
-	if hasAuth {
-		rlResult = h.rateLimiter.Check(ctx, identity.UserID)
-	} else {
-		rlResult = h.rateLimiter.CheckIP(ctx, ClientIP(r, h.trustProxy))
-	}
-	if !rlResult.Allowed {
-		if hasAuth {
-			metrics.RateLimitRejections.WithLabelValues("user").Inc()
-		} else {
-			metrics.RateLimitRejections.WithLabelValues("ip").Inc()
+	var limits sandbox.RunLimits
+	if req.TimeLimitMs != nil {
+		limits.CPU = *req.TimeLimitMs * 1_000_000
+		if limits.CPU < sandbox.MinRunCPU || limits.CPU > sandbox.MaxRunCPU {
+			jsonError(w, "time_limit_ms must be between 100 and 20000", http.StatusBadRequest)
+			return
 		}
-		retryAfter := int(math.Ceil(rlResult.RetryAfter.Seconds()))
-		w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
-		jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
-		return
+	}
+	if req.MemoryLimitKb != nil {
+		limits.Memory = *req.MemoryLimitKb * 1024
+		if limits.Memory < sandbox.MinRunMem || limits.Memory > sandbox.MaxRunMem {
+			jsonError(w, "memory_limit_kb must be between 16384 and 2097152", http.StatusBadRequest)
+			return
+		}
+	}
+
+	// Rate limiting is per authenticated user. Unauthenticated callers are trusted
+	// backends (e.g. an exam server sending every student's code from one IP), so
+	// limiting them by IP would throttle a whole exam; admission control below
+	// still caps the queue depth.
+	if hasAuth {
+		if rlResult := h.rateLimiter.Check(ctx, identity.UserID); !rlResult.Allowed {
+			metrics.RateLimitRejections.WithLabelValues("user").Inc()
+			retryAfter := int(math.Ceil(rlResult.RetryAfter.Seconds()))
+			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+			jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
+			return
+		}
 	}
 
 	// Pick the target stream based on mode
@@ -269,7 +282,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queuedEvt := eventlog.New(jobID.String(), eventlog.EventQueued, nil)
-	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), tests, queuedEvt, targetStream.StreamName()); err != nil {
+	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), tests, limits, queuedEvt, targetStream.StreamName()); err != nil {
 		slog.Error("enqueue failed", "submission_id", jobID, "err", err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return

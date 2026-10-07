@@ -113,20 +113,25 @@ func (s *Stream) Consume(ctx context.Context, consumer string, handler func(ctx 
 // DualConsumer reads from two streams with weighted priority.
 // submitWeight controls how many submit messages to try before one run message.
 type DualConsumer struct {
-	rdb          *redis.Client
-	submitStream string
-	runStream    string
-	group        string
-	submitWeight int
+	rdb              *redis.Client
+	submitStream     string
+	runStream        string
+	group            string
+	submitWeight     int
+	blockReadTimeout time.Duration
 }
 
-func NewDualConsumer(rdb *redis.Client, submitStream, runStream, group string, submitWeight int) *DualConsumer {
+func NewDualConsumer(rdb *redis.Client, submitStream, runStream, group string, submitWeight int, blockReadTimeout time.Duration) *DualConsumer {
+	if blockReadTimeout <= 0 {
+		blockReadTimeout = 500 * time.Millisecond
+	}
 	return &DualConsumer{
-		rdb:          rdb,
-		submitStream: submitStream,
-		runStream:    runStream,
-		group:        group,
-		submitWeight: submitWeight,
+		rdb:              rdb,
+		submitStream:     submitStream,
+		runStream:        runStream,
+		group:            group,
+		submitWeight:     submitWeight,
+		blockReadTimeout: blockReadTimeout,
 	}
 }
 
@@ -220,13 +225,12 @@ func (dc *DualConsumer) blockRead(ctx context.Context, consumer string, handler 
 		return
 	}
 
-	// Block on both streams for 2s — whichever gets a message first
 	msgs, err := dc.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    dc.group,
 		Consumer: consumer,
 		Streams:  []string{dc.submitStream, dc.runStream, ">", ">"},
 		Count:    1,
-		Block:    2 * time.Second,
+		Block:    dc.blockReadTimeout,
 	}).Result()
 
 	if err != nil {

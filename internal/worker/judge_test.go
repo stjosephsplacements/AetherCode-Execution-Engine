@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/model"
@@ -49,5 +50,27 @@ func TestNormalizeOutput(t *testing.T) {
 		if got := normalizeOutput(in); got != want {
 			t.Errorf("normalizeOutput(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+func TestJudgeOutputNormalizesCarriageReturns(t *testing.T) {
+	if JudgeOutput("1\n2\n", "1\r\n2\r\n") != model.VerdictAccepted {
+		t.Fatal("CRLF output should match LF expected")
+	}
+	if JudgeOutput("1\n2", "1\r2") != model.VerdictAccepted {
+		t.Fatal("lone CR should count as a line break")
+	}
+}
+
+func BenchmarkNormalizeOutput(b *testing.B) {
+	// Typical output: 50 lines with trailing spaces and newlines
+	var sb strings.Builder
+	for range 50 {
+		sb.WriteString("Hello World 42  \n")
+	}
+	s := sb.String()
+	b.ResetTimer()
+	for range b.N {
+		normalizeOutput(s)
 	}
 }

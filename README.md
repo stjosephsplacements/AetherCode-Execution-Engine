@@ -136,18 +136,17 @@ All configuration is via environment variables. Copy `deploy/env.example` as a s
 | `AC_JUDGE_URL` | `http://127.0.0.1:5050` | go-judge base URL |
 | `AC_JUDGE_TOKEN` | *(required)* | Bearer token for go-judge |
 | `AC_WORKER_COUNT` | `8` | Parallel worker goroutines |
-| `AC_JOB_TIMEOUT` | `90s` | Per-job deadline (covers compile + all test runs) |
+| `AC_JOB_TIMEOUT` | `90s` | Minimum per-job deadline (compile + all test runs); jobs whose tests and limits need longer get that worst-case budget instead |
 | `AC_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `AC_LOG_FORMAT` | `json` | `json` (production) or `text` (development) |
 | `AC_AUTH_ENABLED` | `false` | Enable Zitadel OIDC JWT validation |
 | `AC_OIDC_ISSUER` | `https://sso.example.com` | OIDC issuer URL |
 | `AC_OIDC_JWKS_URL` | `http://127.0.0.1:8087/oauth/v2/keys` | JWKS endpoint (internal) |
 | `AC_OIDC_AUDIENCE` | *(required when auth enabled)* | Expected `aud` claim |
-| `AC_RATE_LIMIT_PER_MINUTE` | `30` | Max submissions per user per minute |
+| `AC_RATE_LIMIT_PER_MINUTE` | `30` | Max submissions per authenticated user per minute. Unauthenticated callers are trusted backends and are not rate limited; `AC_ADMISSION_MAX_QUEUE_DEPTH` still caps the queue |
 | `AC_RATE_LIMIT_BURST` | `10` | Max submissions per user per 10 seconds |
 | `AC_ADMISSION_MAX_QUEUE_DEPTH` | `5000` | Reject new jobs when queue exceeds this depth |
 | `AC_SUBMIT_WEIGHT` | `3` | Submit-stream priority weight vs run-stream |
-| `AC_TRUST_PROXY` | `false` | Read client IP from `X-Forwarded-For` |
 | `AC_CORS_ALLOWED_ORIGINS` | *(empty = CORS disabled)* | Comma-separated allowed origins |
 | `AC_STREAM_NAME` | `ac:submissions` | Legacy stream (drained on startup, then unused) |
 | `AC_SUBMIT_STREAM` | `ac:submissions:submit` | Submit-mode stream key |
@@ -200,7 +199,9 @@ Submit code for execution.
 | `language` | string | Yes | See [Supported Languages](#supported-languages) |
 | `source_code` | string | Yes | Max 64 KB |
 | `mode` | string | No | `"run"` (default) or `"submit"` |
-| `tests` | array | For `run` mode | Max 100 tests; each input/expected_output max 64 KB |
+| `tests` | array | For `run` mode | Max 100 tests; each input/expected_output max 8 MB (request body max 64 MB) |
+| `time_limit_ms` | integer | No | Run mode: CPU time limit per test, 100–20000 (default: language default, 2 s) |
+| `memory_limit_kb` | integer | No | Run mode: memory limit per test, 16384–2097152 (default 512 MB; Java never below 256 MB) |
 | `problem_version_id` | string (UUID) | For `submit` mode | Server-side test suite to grade against |
 | `idempotency_key` | string | No | Client-chosen key; same key + user + mode returns the original job ID |
 
@@ -294,7 +295,7 @@ data: {
 }
 ```
 
-> **Note:** In `submit` mode, `stdout_preview` and `stderr_preview` are omitted for hidden (non-sample) tests.
+> **Note:** In `submit` mode, `stdout_preview` and `stderr_preview` are omitted for hidden (non-sample) tests. In `run` mode each result also carries the complete `stdout` and `stderr` (previews are cut to 256 bytes), for callers that grade with their own checker.
 
 **Verdict values**
 
@@ -302,9 +303,9 @@ data: {
 |---|---|
 | `accepted` | All tests passed |
 | `wrong_answer` | Output did not match expected |
-| `time_limit` | Exceeded CPU time limit (2s per test) |
-| `memory_limit` | Exceeded memory limit (512 MB per test) |
-| `output_limit` | Stdout exceeded 64 KB |
+| `time_limit` | Exceeded the CPU time limit (`time_limit_ms`, default 2 s per test) or twice that in wall-clock time |
+| `memory_limit` | Exceeded the memory limit (`memory_limit_kb`, default 512 MB per test) |
+| `output_limit` | Stdout exceeded 8 MB |
 | `runtime_error` | Non-zero exit code or signal |
 | `compilation_error` | Compiler rejected the source — `compile_stderr` present in VERDICT data |
 | `internal_error` | System-level failure (sandbox unreachable, no tests found) |

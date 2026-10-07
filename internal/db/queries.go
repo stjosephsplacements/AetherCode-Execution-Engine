@@ -171,6 +171,61 @@ func InsertTestResults(ctx context.Context, pool *pgxpool.Pool, submissionID uui
 	return firstErr
 }
 
+// InsertResultsAndVerdict combines InsertTestResults + UpdateSubmissionVerdict
+// into a single pgx.Batch (one DB round trip instead of two).
+func InsertResultsAndVerdict(ctx context.Context, pool *pgxpool.Pool, submissionID uuid.UUID,
+	results []model.TestResult, status model.Status, verdict model.Verdict, compileStderr string,
+	cpuTimeNs, memoryBytes int64, testCount, testsPassed int) error {
+
+	batch := &pgx.Batch{}
+
+	for _, r := range results {
+		batch.Queue(`
+			INSERT INTO submission_test_results
+				(submission_id, test_index, verdict, cpu_time_ns, memory_bytes, stdout_preview, stderr_preview)
+			VALUES ($1, $2, $3, $4, $5, $6, $7)
+			ON CONFLICT (submission_id, test_index) DO UPDATE SET
+				verdict = EXCLUDED.verdict,
+				cpu_time_ns = EXCLUDED.cpu_time_ns,
+				memory_bytes = EXCLUDED.memory_bytes,
+				stdout_preview = EXCLUDED.stdout_preview,
+				stderr_preview = EXCLUDED.stderr_preview`,
+			submissionID, r.TestIndex, r.Verdict, r.CPUTimeNs, r.MemoryBytes,
+			Truncate(r.StdoutPreview, 256), Truncate(r.StderrPreview, 256))
+	}
+
+	batch.Queue(`
+		UPDATE submissions
+		SET status = $2, verdict = $3, compile_stderr = $4,
+		    cpu_time_ns = $5, memory_bytes = $6,
+		    test_count = $7, tests_passed = $8, updated_at = now()
+		WHERE id = $1 AND status NOT IN ('completed', 'failed')`,
+		submissionID, status, verdict, compileStderr, cpuTimeNs, memoryBytes, testCount, testsPassed)
+
+	br := pool.SendBatch(ctx, batch)
+	defer br.Close() //nolint:errcheck
+
+	var firstErr error
+	for i := range results {
+		if _, err := br.Exec(); err != nil && firstErr == nil {
+			firstErr = fmt.Errorf("db: insert test result[%d]: %w", i, err)
+		}
+	}
+
+	tag, err := br.Exec()
+	if err != nil {
+		if firstErr == nil {
+			firstErr = fmt.Errorf("db: update verdict in batch: %w", err)
+		}
+	} else if tag.RowsAffected() == 0 {
+		if firstErr == nil {
+			firstErr = fmt.Errorf("db: verdict already written for %s", submissionID)
+		}
+	}
+
+	return firstErr
+}
+
 type OrphanedSubmission struct {
 	ID   uuid.UUID
 	Mode string

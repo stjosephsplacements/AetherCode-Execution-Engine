@@ -4,17 +4,19 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/eventlog"
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
 
 // PrepareAndEnqueue stores tests, publishes the QUEUED event, and enqueues
 // the submission in a single Redis pipeline (1 round trip instead of 3).
-func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, tests []TestData, evt eventlog.Event, streamKey string) error {
+func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, tests []TestData, limits sandbox.RunLimits, evt eventlog.Event, streamKey string) error {
 	data, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("pubsub: marshal event: %w", err)
@@ -24,10 +26,11 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, tests []Te
 
 	if len(tests) > 0 {
 		key := "ac:tests:" + jobID
-		pipe.HSet(ctx, key, "count", len(tests))
+		pipe.HSet(ctx, key, "count", len(tests), "cpu_ns", limits.CPU, "mem_bytes", limits.Memory)
 		for i, t := range tests {
-			pipe.HSet(ctx, key, fmt.Sprintf("%d:input", i), t.Input)
-			pipe.HSet(ctx, key, fmt.Sprintf("%d:expected", i), t.ExpectedOutput)
+			prefix := strconv.Itoa(i)
+			pipe.HSet(ctx, key, prefix+":input", t.Input)
+			pipe.HSet(ctx, key, prefix+":expected", t.ExpectedOutput)
 		}
 		pipe.Expire(ctx, key, testDataTTL)
 	}
@@ -149,52 +152,44 @@ func (p *PubSub) Subscribe(ctx context.Context, jobID string) <-chan eventlog.Ev
 	return ch
 }
 
-// StoreTests stores test cases in a Redis hash for the worker to read.
-func (p *PubSub) StoreTests(ctx context.Context, jobID string, tests []TestData) error {
-	key := "ac:tests:" + jobID
-	pipe := p.rdb.Pipeline()
-	pipe.HSet(ctx, key, "count", len(tests))
-	for i, t := range tests {
-		pipe.HSet(ctx, key, fmt.Sprintf("%d:input", i), t.Input)
-		pipe.HSet(ctx, key, fmt.Sprintf("%d:expected", i), t.ExpectedOutput)
-	}
-	pipe.Expire(ctx, key, testDataTTL)
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		return fmt.Errorf("pubsub: store tests: %w", err)
-	}
-	return nil
-}
-
-// GetTests retrieves test cases from Redis in a single round trip.
-func (p *PubSub) GetTests(ctx context.Context, jobID string) ([]TestData, error) {
+// GetTests retrieves test cases and the job's run limits from Redis in a single round trip.
+func (p *PubSub) GetTests(ctx context.Context, jobID string) ([]TestData, sandbox.RunLimits, error) {
 	key := "ac:tests:" + jobID
 	fields, err := p.rdb.HGetAll(ctx, key).Result()
 	if err != nil {
-		return nil, fmt.Errorf("pubsub: get tests: %w", err)
+		return nil, sandbox.RunLimits{}, fmt.Errorf("pubsub: get tests: %w", err)
 	}
 
 	countStr, ok := fields["count"]
 	if !ok {
-		return nil, fmt.Errorf("pubsub: no test count in %s", key)
+		return nil, sandbox.RunLimits{}, fmt.Errorf("pubsub: no test count in %s", key)
 	}
 
-	var count int
-	if n, err := fmt.Sscanf(countStr, "%d", &count); n != 1 || err != nil {
-		return nil, fmt.Errorf("pubsub: corrupt test count %q in %s", countStr, key)
+	count, err := strconv.Atoi(countStr)
+	if err != nil {
+		return nil, sandbox.RunLimits{}, fmt.Errorf("pubsub: corrupt test count %q in %s", countStr, key)
 	}
 	if count < 0 || count > 10000 {
-		return nil, fmt.Errorf("pubsub: invalid test count %d in %s", count, key)
+		return nil, sandbox.RunLimits{}, fmt.Errorf("pubsub: invalid test count %d in %s", count, key)
 	}
 
 	tests := make([]TestData, count)
 	for i := range count {
+		prefix := strconv.Itoa(i)
 		tests[i] = TestData{
-			Input:          fields[fmt.Sprintf("%d:input", i)],
-			ExpectedOutput: fields[fmt.Sprintf("%d:expected", i)],
+			Input:          fields[prefix+":input"],
+			ExpectedOutput: fields[prefix+":expected"],
 		}
 	}
-	return tests, nil
+	var limits sandbox.RunLimits
+	// Absent on jobs enqueued before limits existed: zero keeps language defaults.
+	if v := fields["cpu_ns"]; v != "" {
+		limits.CPU, _ = strconv.ParseUint(v, 10, 64)
+	}
+	if v := fields["mem_bytes"]; v != "" {
+		limits.Memory, _ = strconv.ParseUint(v, 10, 64)
+	}
+	return tests, limits, nil
 }
 
 type TestData struct {

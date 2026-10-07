@@ -22,12 +22,12 @@ func NewClient(baseURL, authToken string) *Client {
 		baseURL:   baseURL,
 		authToken: authToken,
 		httpClient: &http.Client{
-			Timeout: 65 * time.Second, // covers ResponseHeaderTimeout + margin
+			Timeout: 0, // per-request context.WithTimeout controls deadline
 			Transport: &http.Transport{
 				MaxIdleConns:          128,
 				MaxIdleConnsPerHost:   128,
 				IdleConnTimeout:       90 * time.Second,
-				ResponseHeaderTimeout: 60 * time.Second,
+				ResponseHeaderTimeout: 0, // batched /run calls vary in duration; context deadline governs
 				DisableCompression:    true,
 				DialContext: (&net.Dialer{
 					Timeout:   5 * time.Second,
@@ -59,18 +59,14 @@ func (c *Client) Run(ctx context.Context, req Request) ([]Result, error) {
 	}
 	defer resp.Body.Close() //nolint:errcheck // best-effort: the http client reuses pooled connections
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, 16<<20))
-	if err != nil {
-		return nil, fmt.Errorf("sandbox: read response: %w", err)
-	}
-
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("sandbox: HTTP %d: %s", resp.StatusCode, string(respBody))
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("sandbox: HTTP %d: %s", resp.StatusCode, string(errBody))
 	}
 
 	var results []Result
-	if err := json.Unmarshal(respBody, &results); err != nil {
-		return nil, fmt.Errorf("sandbox: unmarshal response: %w", err)
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 16<<20)).Decode(&results); err != nil {
+		return nil, fmt.Errorf("sandbox: decode response: %w", err)
 	}
 	return results, nil
 }
@@ -105,6 +101,7 @@ type Cmd struct {
 	Env           []string          `json:"env,omitempty"`
 	Files         []CmdFile         `json:"files"`
 	CPULimit      uint64            `json:"cpuLimit"`
+	ClockLimit    uint64            `json:"clockLimit,omitempty"`
 	MemoryLimit   uint64            `json:"memoryLimit"`
 	ProcLimit     uint64            `json:"procLimit"`
 	CopyIn        map[string]CopyIn `json:"copyIn,omitempty"`
