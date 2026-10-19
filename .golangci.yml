@@ -13,8 +13,6 @@ linters:
     - ineffassign
     - bodyclose
     - gosec
-    - goimports    # enforces canonical import grouping (stdlib / external / internal)
-    - gofmt        # enforces gofmt -s — no manual whitespace debates
     - misspell     # catches typos in comments and strings
     - whitespace   # trailing whitespace / unnecessary blank lines
   settings:
@@ -31,9 +29,6 @@ linters:
     gosec:
       excludes:
         - G104 # unchecked errors — handled by errcheck, and fail-open is by design
-    goimports:
-      # Group imports: stdlib first, then external packages, then internal.
-      local-prefixes: github.com/stjosephsplacements/AetherCode-Execution-Engine
   exclusions:
     generated: lax
     # The load generator is a throwaway benchmarking tool: it uses a fast
@@ -44,3 +39,15 @@ linters:
         linters:
           - gosec
           - errcheck
+
+formatters:
+  enable:
+    - goimports
+    - gofmt
+  settings:
+    goimports:
+      # Group imports: stdlib first, then external, then internal.
+      local-prefixes:
+        - github.com/stjosephsplacements/AetherCode-Execution-Engine
+    gofmt:
+      simplify: true
