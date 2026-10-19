@@ -115,14 +115,3 @@ reviews:
 
 chat:
   auto_reply: true
-
-# Automatically generate a summary comment on every PR.
-pull_requests:
-  summary:
-    auto_summary: true
-
-integrations:
-  jira:
-    usage: auto
-  linear:
-    usage: auto
