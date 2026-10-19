@@ -1,0 +1,102 @@
+name: pr-size-check
+
+# Reject PRs that change too many files or add too many lines.
+# Large PRs are hard to review properly. Contributors must break
+# big changes into focused, reviewable slices.
+#
+# Limits (files changed / lines added):
+#   XS  :   0–10 files,    0–99 lines  → auto-label xs
+#   S   :  11–20 files,  100–299 lines → auto-label s
+#   M   :  21–40 files,  300–599 lines → auto-label m   ← soft warning
+#   L   :  41–60 files,  600–999 lines → auto-label l   ← hard block
+#   XL  :   61+ files,   1000+ lines   → always blocked
+#
+# Maintainers can add the 'size-override' label to bypass the block.
+
+on:
+  pull_request:
+    branches: [development]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check PR size
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          PR="${{ github.event.pull_request.number }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          # Bots exempt
+          case "${AUTHOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*)
+              echo "Bot ${AUTHOR} — exempted."
+              exit 0
+              ;;
+          esac
+
+          # Check for override label
+          LABELS=$(gh pr view "$PR" --repo "$REPO" --json labels --jq '[.labels[].name] | join(",")' 2>/dev/null)
+          if echo "$LABELS" | grep -q "size-override"; then
+            echo "size-override label present — bypassing size check."
+            exit 0
+          fi
+
+          # Fetch PR stats
+          DATA=$(gh pr view "$PR" --repo "$REPO" --json additions,deletions,changedFiles)
+          ADDITIONS=$(echo "$DATA" | python3 -c "import sys,json; print(json.load(sys.stdin)['additions'])")
+          DELETIONS=$(echo "$DATA"  | python3 -c "import sys,json; print(json.load(sys.stdin)['deletions'])")
+          FILES=$(echo "$DATA"      | python3 -c "import sys,json; print(json.load(sys.stdin)['changedFiles'])")
+          TOTAL=$((ADDITIONS + DELETIONS))
+
+          echo "Files changed: ${FILES}, Lines added: ${ADDITIONS}, Lines deleted: ${DELETIONS}, Total diff: ${TOTAL}"
+
+          # Determine size label
+          if   [ "$FILES" -le 10  ] && [ "$ADDITIONS" -le 99  ]; then SIZE="XS"
+          elif [ "$FILES" -le 20  ] && [ "$ADDITIONS" -le 299 ]; then SIZE="S"
+          elif [ "$FILES" -le 40  ] && [ "$ADDITIONS" -le 599 ]; then SIZE="M"
+          elif [ "$FILES" -le 60  ] && [ "$ADDITIONS" -le 999 ]; then SIZE="L"
+          else SIZE="XL"
+          fi
+
+          # Remove old size labels, apply new one
+          for lbl in size/xs size/s size/m size/l size/xl; do
+            gh pr edit "$PR" --repo "$REPO" --remove-label "$lbl" 2>/dev/null || true
+          done
+          gh label create "size/${SIZE,,}" --repo "$REPO" --color "0075ca" 2>/dev/null || true
+          gh pr edit "$PR" --repo "$REPO" --add-label "size/${SIZE,,}" 2>/dev/null || true
+
+          # Block L and XL
+          if [ "$SIZE" = "L" ] || [ "$SIZE" = "XL" ]; then
+            gh pr comment "$PR" --repo "$REPO" --body "$(cat <<EOF
+## ❌ PR is too large (size: **${SIZE}**)
+
+This PR changes **${FILES} files** and adds **${ADDITIONS} lines** — that's a **${SIZE}**-sized PR.
+
+Reviews of large PRs are superficial and miss bugs. Please **split this PR** into smaller, focused slices:
+
+- Each PR should do **one thing** (add a feature, fix a bug, add tests, update docs)
+- Target ≤ 40 files and ≤ 600 added lines per PR
+- If the change is genuinely atomic and can't be split, ask a maintainer to add the \`size-override\` label
+
+_Tip: separate refactoring commits from feature commits._
+EOF
+)"
+            echo "::error::PR is size ${SIZE} (${FILES} files, ${ADDITIONS} lines added). Max is M (40 files, 600 lines). Ask a maintainer for a size-override label if the change is atomic."
+            exit 1
+          fi
+
+          if [ "$SIZE" = "M" ]; then
+            echo "::warning::PR is size M (${FILES} files, ${ADDITIONS} lines). Consider splitting if possible."
+          fi
+
+          echo "PR size: ${SIZE} — OK ✅"
