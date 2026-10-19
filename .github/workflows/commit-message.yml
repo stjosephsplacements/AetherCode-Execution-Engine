@@ -1,0 +1,101 @@
+name: commit-message
+
+# Enforce conventional commit format on every commit in the PR.
+# Format: <type>(<scope>): <description>
+# Types: feat|fix|docs|style|refactor|perf|test|build|ci|chore|security|revert
+# Subject line must be ≤ 72 characters and not end with a period.
+#
+# Exemptions: merge commits, dependabot, github-actions
+
+on:
+  pull_request:
+    branches: [development]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  commits:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate commit messages
+        run: |
+          set -euo pipefail
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+          PR="${{ github.event.pull_request.number }}"
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          REPO="${GITHUB_REPOSITORY}"
+
+          case "${AUTHOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*)
+              echo "Bot ${AUTHOR} — exempted."
+              exit 0
+              ;;
+          esac
+
+          PATTERN='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|security|revert)(\([a-z0-9/_-]+\))?: .{1,72}[^.]$'
+          FAILED=0
+          BAD_COMMITS=""
+
+          while IFS= read -r line; do
+            HASH="${line%% *}"
+            MSG="${line#* }"
+
+            # Skip merge commits
+            if echo "$MSG" | grep -qE '^Merge (pull request|branch)'; then
+              continue
+            fi
+
+            if ! echo "$MSG" | grep -qE "$PATTERN"; then
+              FAILED=1
+              BAD_COMMITS="${BAD_COMMITS}\n- \`${HASH}\`: ${MSG}"
+              echo "BAD: ${HASH} — ${MSG}"
+            else
+              echo "OK:  ${HASH} — ${MSG}"
+            fi
+          done < <(git log --oneline "${BASE}..${HEAD}" 2>/dev/null || true)
+
+          if [ "$FAILED" -ne 0 ]; then
+            gh pr comment "$PR" --repo "$REPO" --body "$(cat <<EOF
+## ❌ Commit message format
+
+The following commits don't follow the **Conventional Commits** format:
+$(printf '%b' "${BAD_COMMITS}")
+
+**Required format:**
+\`\`\`
+<type>(<scope>): <short description>
+\`\`\`
+
+**Valid types:** \`feat\`, \`fix\`, \`docs\`, \`style\`, \`refactor\`, \`perf\`, \`test\`, \`build\`, \`ci\`, \`chore\`, \`security\`, \`revert\`
+
+**Rules:**
+- Subject line ≤ 72 characters
+- Does not end with a period
+- Scope is optional but recommended (e.g. \`fix(gateway): ...\`)
+
+**Examples:**
+- ✅ \`feat(worker): add token checker for whitespace-insensitive comparison\`
+- ✅ \`fix(db): prevent verdict update race on duplicate delivery\`
+- ✅ \`test(queue): add reclaimer integration test\`
+- ❌ \`updated stuff.\`
+- ❌ \`Fixed the bug\`
+
+Amend your commits (\`git commit --amend\` or \`git rebase -i\`) and force-push.
+EOF
+)"
+            echo "::error::One or more commits have non-conventional messages. See PR comment for details."
+            exit 1
+          fi
+
+          echo "All commit messages are valid. ✅"
