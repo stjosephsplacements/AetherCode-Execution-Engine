@@ -1,0 +1,80 @@
+name: pr-questionnaire
+
+# Verify that all required questions in the PR template are answered.
+# A PR with any "A: …" placeholder left unanswered fails this check and
+# gets a comment listing exactly which questions are still blank.
+#
+# Maintainers (write/admin) are exempt — they can merge without filling it out.
+
+on:
+  pull_request:
+    branches: [development]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  questionnaire:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check PR questionnaire is answered
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          PR="${{ github.event.pull_request.number }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          # Exempt bots
+          case "${AUTHOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*)
+              echo "Bot ${AUTHOR} — exempted."
+              exit 0
+              ;;
+          esac
+
+          # Exempt maintainers
+          PERM=$(gh api "repos/${REPO}/collaborators/${AUTHOR}/permission" \
+            --jq '.permission' 2>/dev/null || echo "none")
+          if [[ "$PERM" == "admin" || "$PERM" == "write" || "$PERM" == "maintain" ]]; then
+            echo "Maintainer ${AUTHOR} ('${PERM}') — exempted."
+            exit 0
+          fi
+
+          # Fetch the PR body
+          BODY=$(gh pr view "$PR" --repo "$REPO" --json body --jq '.body')
+
+          # Find unanswered questions (lines matching "A: …" literally)
+          UNANSWERED=$(printf '%s' "$BODY" | grep -n 'A: \.\.\.' || true)
+
+          if [ -z "$UNANSWERED" ]; then
+            echo "All questions answered. ✅"
+            exit 0
+          fi
+
+          # Build a readable list
+          QUESTION_NUMS=$(printf '%s' "$UNANSWERED" | sed 's/.*\(Q[0-9]\+\).*/\1/' | tr '\n' ', ' | sed 's/,$//')
+
+          gh pr comment "$PR" --repo "$REPO" --body "$(cat <<EOF
+## ❌ PR questionnaire incomplete
+
+Hi @${AUTHOR}! Before this PR can be reviewed, you need to **answer all five questions** in the PR description.
+
+The following questions are still left as \`A: …\` (unanswered):
+
+$(printf '%s' "$UNANSWERED" | while IFS= read -r line; do
+  q=$(echo "$line" | grep -o 'Q[0-9][^*]*' | head -1)
+  echo "- **$q**"
+done)
+
+**Edit the PR description** (pencil icon at the top of the PR), replace each \`A: …\` with your actual answer, and save. This check will re-run automatically.
+
+_This is not optional — it helps reviewers understand your change without back-and-forth._
+EOF
+)"
+          echo "::error::PR #${PR} has unanswered questionnaire items: ${QUESTION_NUMS}"
+          exit 1
