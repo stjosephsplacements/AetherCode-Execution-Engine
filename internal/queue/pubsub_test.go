@@ -98,7 +98,9 @@ func TestGetTests_ZeroLimitsPreservesDefault(t *testing.T) {
 	ps := NewPubSub(rdb)
 
 	evt := eventlog.New("job-lim", eventlog.EventQueued, nil)
-	ps.PrepareAndEnqueue(ctx, "job-lim", []TestData{{Input: "x", ExpectedOutput: "y"}}, sandbox.RunLimits{}, evt, "s")
+	if err := ps.PrepareAndEnqueue(ctx, "job-lim", []TestData{{Input: "x", ExpectedOutput: "y"}}, sandbox.RunLimits{}, evt, "s"); err != nil {
+		t.Fatalf("PrepareAndEnqueue: %v", err)
+	}
 
 	_, limits, err := ps.GetTests(ctx, "job-lim")
 	if err != nil {
@@ -152,7 +154,9 @@ func TestSubscribe_ReceivesPublishedEvents(t *testing.T) {
 	// Publish in a goroutine after a short delay
 	go func() {
 		time.Sleep(50 * time.Millisecond)
-		ps.PublishEvent(context.Background(), eventlog.New(jobID, eventlog.EventVerdict, map[string]any{"verdict": "accepted"}))
+		if err := ps.PublishEvent(context.Background(), eventlog.New(jobID, eventlog.EventVerdict, map[string]any{"verdict": "accepted"})); err != nil {
+			_ = err // best-effort in goroutine; test will fail if event not received
+		}
 	}()
 
 	select {
@@ -214,7 +218,9 @@ func TestGetEventLog_Replay(t *testing.T) {
 	jobID := "job-replay"
 	// Simulate a completed job: QUEUED → RUNNING → VERDICT
 	for _, typ := range []eventlog.EventType{eventlog.EventQueued, eventlog.EventRunning, eventlog.EventVerdict} {
-		ps.PublishEvent(ctx, eventlog.New(jobID, typ, nil))
+		if err := ps.PublishEvent(ctx, eventlog.New(jobID, typ, nil)); err != nil {
+			t.Fatalf("PublishEvent %s: %v", typ, err)
+		}
 	}
 
 	// SSE handler reconnects and replays
