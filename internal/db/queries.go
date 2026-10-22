@@ -171,6 +171,41 @@ func InsertTestResults(ctx context.Context, pool *pgxpool.Pool, submissionID uui
 	return firstErr
 }
 
+// GetTestResults fetches all test results for a given submission ordered by test_index.
+func GetTestResults(ctx context.Context, pool *pgxpool.Pool, submissionID uuid.UUID) ([]model.TestResult, error) {
+	rows, err := pool.Query(ctx, `
+		SELECT test_index, verdict, cpu_time_ns, memory_bytes, stdout_preview, stderr_preview
+		FROM submission_test_results
+		WHERE submission_id = $1
+		ORDER BY test_index ASC`, submissionID)
+	if err != nil {
+		return nil, fmt.Errorf("db: query test results: %w", err)
+	}
+	defer rows.Close()
+
+	var results []model.TestResult
+	for rows.Next() {
+		var r model.TestResult
+		var verdict string
+		var stdout, stderr *string
+		if err := rows.Scan(&r.TestIndex, &verdict, &r.CPUTimeNs, &r.MemoryBytes, &stdout, &stderr); err != nil {
+			return nil, fmt.Errorf("db: scan test result: %w", err)
+		}
+		r.Verdict = model.Verdict(verdict)
+		if stdout != nil {
+			r.StdoutPreview = *stdout
+		}
+		if stderr != nil {
+			r.StderrPreview = *stderr
+		}
+		results = append(results, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("db: iterate test results: %w", err)
+	}
+	return results, nil
+}
+
 // InsertResultsAndVerdict combines InsertTestResults + UpdateSubmissionVerdict
 // into a single pgx.Batch (one DB round trip instead of two).
 func InsertResultsAndVerdict(ctx context.Context, pool *pgxpool.Pool, submissionID uuid.UUID,

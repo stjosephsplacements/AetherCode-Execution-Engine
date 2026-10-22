@@ -203,6 +203,81 @@ components:
           type: string
           example: "source_code exceeds 64KB"
 
+    GetSubmissionResponse:
+      type: object
+      required:
+        - job_id
+        - status
+        - language
+        - cpu_time_ns
+        - memory_bytes
+        - test_count
+        - tests_passed
+        - created_at
+      properties:
+        job_id:
+          type: string
+          format: uuid
+          example: "018f1d2e-3456-7890-abcd-ef0123456789"
+        status:
+          $ref: "#/components/schemas/Status"
+        verdict:
+          $ref: "#/components/schemas/Verdict"
+        compile_stderr:
+          type: string
+          description: Compiler diagnostic output (populated on compilation error).
+        language:
+          $ref: "#/components/schemas/Language"
+        cpu_time_ns:
+          type: integer
+          format: int64
+          example: 18000000
+        memory_bytes:
+          type: integer
+          format: int64
+          example: 1048576
+        test_count:
+          type: integer
+          example: 3
+        tests_passed:
+          type: integer
+          example: 3
+        created_at:
+          type: string
+          format: date-time
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/SubmissionTestResult"
+
+    SubmissionTestResult:
+      type: object
+      required:
+        - test_index
+        - verdict
+        - cpu_time_ns
+        - memory_bytes
+      properties:
+        test_index:
+          type: integer
+          example: 0
+        verdict:
+          $ref: "#/components/schemas/Verdict"
+        cpu_time_ns:
+          type: integer
+          format: int64
+          example: 6000000
+        memory_bytes:
+          type: integer
+          format: int64
+          example: 524288
+        stdout_preview:
+          type: string
+          example: "42\n"
+        stderr_preview:
+          type: string
+          example: ""
+
     HealthResponse:
       type: object
       required:
@@ -760,6 +835,59 @@ paths:
                   active: 0
                   configured: 8
                 queues: {}
+
+  /api/v1/submissions/{id}:
+    get:
+      operationId: getSubmission
+      summary: Retrieve submission status and test results
+      description: |
+        Returns the submission metadata, status, overall verdict, and per-test execution
+        results. Authenticated callers must own the submission. Unauthenticated callers
+        must provide the `stream_token` query parameter issued at job creation.
+      tags:
+        - Execution
+      security:
+        - {}
+        - bearerAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: UUID of the submission to retrieve.
+          schema:
+            type: string
+            format: uuid
+        - name: stream_token
+          in: query
+          required: false
+          description: Stream token returned by POST /api/v1/execute (required for unauthenticated callers).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Submission details and test results.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GetSubmissionResponse"
+        "400":
+          description: Invalid submission ID format.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Missing or invalid stream token.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Submission not found.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /api/v1/languages:
     get:

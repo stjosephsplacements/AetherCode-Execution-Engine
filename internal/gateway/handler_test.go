@@ -312,6 +312,46 @@ func TestHandleCancel_InvalidID(t *testing.T) {
 	}
 }
 
+func TestHandleGetSubmission_InvalidID(t *testing.T) {
+	judgeSrv := fakeJudgeServer(t, "1.13.0")
+	judge := sandbox.NewClient(judgeSrv.URL, "test-token")
+	_, rdb := newTestRedis(t)
+	pool := newUnreachablePGPool(t)
+
+	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
+	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/submissions/not-a-uuid", nil)
+	req.SetPathValue("id", "not-a-uuid")
+	h.HandleGetSubmission(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleGetSubmission_NotFound(t *testing.T) {
+	judgeSrv := fakeJudgeServer(t, "1.13.0")
+	judge := sandbox.NewClient(judgeSrv.URL, "test-token")
+	_, rdb := newTestRedis(t)
+	pool := newUnreachablePGPool(t)
+
+	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
+	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/submissions/00000000-0000-0000-0000-000000000001", nil)
+	req.SetPathValue("id", "00000000-0000-0000-0000-000000000001")
+	h.HandleGetSubmission(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", rec.Code)
+	}
+}
+
 func TestHandleExecute_RejectsUnknownChecker(t *testing.T) {
 	judgeSrv := fakeJudgeServer(t, "1.13.0")
 	judge := sandbox.NewClient(judgeSrv.URL, "test-token")

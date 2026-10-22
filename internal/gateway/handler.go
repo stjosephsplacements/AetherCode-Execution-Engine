@@ -101,6 +101,7 @@ func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/stream", h.HandleStream)
 	mux.HandleFunc("GET /api/v1/health", h.HandleHealth)
 	mux.HandleFunc("GET /api/v1/languages", h.HandleLanguages)
+	mux.HandleFunc("GET /api/v1/submissions/{id}", h.HandleGetSubmission)
 	mux.HandleFunc("DELETE /api/v1/submissions/{id}", h.HandleCancel)
 }
 
@@ -509,4 +510,94 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]bool{"cancelled": true}) //nolint:errcheck
+}
+
+type getSubmissionResponse struct {
+	JobID         string             `json:"job_id"`
+	Status        string             `json:"status"`
+	Verdict       string             `json:"verdict,omitempty"`
+	CompileStderr string             `json:"compile_stderr,omitempty"`
+	Language      string             `json:"language"`
+	CPUTimeNs     int64              `json:"cpu_time_ns"`
+	MemoryBytes   int64              `json:"memory_bytes"`
+	TestCount     int                `json:"test_count"`
+	TestsPassed   int                `json:"tests_passed"`
+	CreatedAt     time.Time          `json:"created_at"`
+	Results       []testResultOutput `json:"results,omitempty"`
+}
+
+type testResultOutput struct {
+	TestIndex     int    `json:"test_index"`
+	Verdict       string `json:"verdict"`
+	CPUTimeNs     int64  `json:"cpu_time_ns"`
+	MemoryBytes   int64  `json:"memory_bytes"`
+	StdoutPreview string `json:"stdout_preview"`
+	StderrPreview string `json:"stderr_preview"`
+}
+
+// HandleGetSubmission retrieves a submission's status and test results.
+func (h *Handler) HandleGetSubmission(w http.ResponseWriter, r *http.Request) {
+	idStr := r.PathValue("id")
+	parsedID, err := uuid.Parse(idStr)
+	if err != nil {
+		jsonError(w, "invalid submission id", http.StatusBadRequest)
+		return
+	}
+
+	ctx := r.Context()
+	identity, hasAuth := auth.GetIdentity(ctx)
+
+	sub, err := db.GetSubmission(ctx, h.pool, parsedID)
+	if err != nil {
+		jsonError(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	// Ownership check — same rules as SSE stream and cancellation.
+	if hasAuth {
+		if sub.TenantID != identity.TenantID || sub.UserID == nil || *sub.UserID != identity.UserID {
+			jsonError(w, "not found", http.StatusNotFound)
+			return
+		}
+	} else {
+		tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		valid := verifyStreamToken(tokenCtx, h.rdb, parsedID.String(), r.URL.Query().Get("stream_token"))
+		tokenCancel()
+		if !valid {
+			jsonError(w, "invalid or missing stream_token", http.StatusUnauthorized)
+			return
+		}
+	}
+
+	resp := getSubmissionResponse{
+		JobID:         sub.ID.String(),
+		Status:        string(sub.Status),
+		Verdict:       string(sub.Verdict),
+		CompileStderr: sub.CompileStderr,
+		Language:      sub.Language,
+		CPUTimeNs:     sub.CPUTimeNs,
+		MemoryBytes:   sub.MemoryBytes,
+		TestCount:     sub.TestCount,
+		TestsPassed:   sub.TestsPassed,
+		CreatedAt:     sub.CreatedAt,
+	}
+
+	testResults, err := db.GetTestResults(ctx, h.pool, parsedID)
+	if err == nil && len(testResults) > 0 {
+		resp.Results = make([]testResultOutput, len(testResults))
+		for i, tr := range testResults {
+			resp.Results[i] = testResultOutput{
+				TestIndex:     tr.TestIndex,
+				Verdict:       string(tr.Verdict),
+				CPUTimeNs:     tr.CPUTimeNs,
+				MemoryBytes:   tr.MemoryBytes,
+				StdoutPreview: tr.StdoutPreview,
+				StderrPreview: tr.StderrPreview,
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(resp) //nolint:errcheck
 }
