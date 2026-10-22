@@ -1,0 +1,75 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aethercode-exec-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aethercode-exec
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow traffic to gateway HTTP and metrics from inside cluster
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 5100
+        - protocol: TCP
+          port: 6060
+  egress:
+    # Allow DNS
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    # Allow Postgres, Redis, go-judge inside the namespace or cluster
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-judge
+      ports:
+        - protocol: TCP
+          port: 5050
+    # Outbound access for DB, Redis, and OIDC issuer
+    - to: []
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 443
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-judge-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: go-judge
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Only the execution engine can send sandbox jobs to go-judge
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aethercode-exec
+      ports:
+        - protocol: TCP
+          port: 5050
+  egress:
+    # go-judge sandboxed executions should NOT have unrestricted network access
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

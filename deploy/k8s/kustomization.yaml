@@ -11,6 +11,9 @@ resources:
   - service.yaml
   - hpa.yaml
   - pdb.yaml
+  - go-judge-configmap.yaml
+  - go-judge.yaml
+  - networkpolicy.yaml
 
 # Override image tag for a specific release:
 #   kustomize edit set image ghcr.io/stjosephsplacements/aethercode-execution-engine=:v1.2.3

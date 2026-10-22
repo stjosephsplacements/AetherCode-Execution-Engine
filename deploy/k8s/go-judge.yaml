@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: go-judge
+  namespace: aethercode
+  labels:
+    app.kubernetes.io/name: go-judge
+    app.kubernetes.io/component: sandbox
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: go-judge
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: go-judge
+        app.kubernetes.io/component: sandbox
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: go-judge
+          image: ghcr.io/stjosephsplacements/aethercode-go-judge:latest
+          imagePullPolicy: IfNotPresent
+          args:
+            - "-http-addr=0.0.0.0:5050"
+            - "-mount-conf=/opt/mount.yaml"
+            - "-enable-cpu-rate"
+            - "-auth-token=$(AC_JUDGE_TOKEN)"
+            - "-parallelism=8"
+            - "-output-limit=16m"
+            - "-copy-out-limit=16m"
+            - "-dir=/opt/file-store"
+          env:
+            - name: AC_JUDGE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aethercode-exec-secrets
+                  key: AC_JUDGE_TOKEN
+          ports:
+            - name: http
+              containerPort: 5050
+              protocol: TCP
+          resources:
+            requests:
+              cpu: "1000m"
+              memory: "1Gi"
+            limits:
+              cpu: "4000m"
+              memory: "4Gi"
+          securityContext:
+            privileged: true
+          volumeMounts:
+            - name: file-store
+              mountPath: /opt/file-store
+            - name: mount-conf
+              mountPath: /opt/mount.yaml
+              subPath: mount.yaml
+              readOnly: true
+          livenessProbe:
+            httpGet:
+              path: /version
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+          readinessProbe:
+            httpGet:
+              path: /version
+              port: http
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            timeoutSeconds: 2
+      volumes:
+        - name: file-store
+          emptyDir: {}
+        - name: mount-conf
+          configMap:
+            name: go-judge-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: go-judge-svc
+  namespace: aethercode
+  labels:
+    app.kubernetes.io/name: go-judge
+spec:
+  selector:
+    app.kubernetes.io/name: go-judge
+  ports:
+    - name: http
+      port: 5050
+      targetPort: http
+      protocol: TCP
+  type: ClusterIP
