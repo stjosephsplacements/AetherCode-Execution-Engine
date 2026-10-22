@@ -48,6 +48,7 @@ First open-source release.
 
 ### Removed — BREAKING
 
+- Migration 007 drops legacy problem bank tables (`problems`, `problem_versions`, `test_cases`), obsolete columns `submissions.problem_version_id` and `submissions.mode`, and the legacy 4-column idempotency index `idx_submissions_idempotency`.
 - `POST /api/v1/execute` no longer accepts `mode` or `problem_version_id`; the engine is a pure executor. Requests with `mode` other than `run`, or with any `problem_version_id`, now get `400` instead of being silently ignored; a leftover `"mode":"run"` is tolerated.
 - `tests` is always required (at least one). Callers that used `mode: submit` must now send their own tests.
 - Idempotency keys are no longer scoped by mode: the same key and user returns the original job ID.

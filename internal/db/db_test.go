@@ -387,3 +387,65 @@ func TestMigration006_DedupesCrossModeKeys(t *testing.T) {
 		t.Errorf("idx_submissions_idempotency_v2 count = %d, want 1", n)
 	}
 }
+
+func TestMigration007_DropsLegacyProblemBankAndColumns(t *testing.T) {
+	ctx := context.Background()
+	pool := freshDB(t)
+
+	// Migrate up to 6 first.
+	if err := db.Migrate(ctx, pool, migrationsUpTo(t, 6)); err != nil {
+		t.Fatalf("migrate to 6: %v", err)
+	}
+
+	// Verify legacy tables and columns exist before 007.
+	var tableCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM information_schema.tables WHERE table_name IN ('problems', 'problem_versions', 'test_cases')`).Scan(&tableCount); err != nil {
+		t.Fatalf("check tables pre-007: %v", err)
+	}
+	if tableCount != 3 {
+		t.Fatalf("expected 3 legacy tables pre-007, got %d", tableCount)
+	}
+
+	// Run migration 007.
+	if err := db.Migrate(ctx, pool, migrationsUpTo(t, 7)); err != nil {
+		t.Fatalf("migrate to 7: %v", err)
+	}
+
+	// Verify legacy tables are dropped.
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM information_schema.tables WHERE table_name IN ('problems', 'problem_versions', 'test_cases')`).Scan(&tableCount); err != nil {
+		t.Fatalf("check tables post-007: %v", err)
+	}
+	if tableCount != 0 {
+		t.Errorf("expected 0 legacy tables post-007, got %d", tableCount)
+	}
+
+	// Verify legacy columns in submissions are dropped.
+	var colCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM information_schema.columns WHERE table_name = 'submissions' AND column_name IN ('problem_version_id', 'mode')`).Scan(&colCount); err != nil {
+		t.Fatalf("check columns post-007: %v", err)
+	}
+	if colCount != 0 {
+		t.Errorf("expected 0 legacy columns post-007, got %d", colCount)
+	}
+
+	// Verify legacy index idx_submissions_idempotency is dropped, while v2 remains.
+	var idxCount int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_submissions_idempotency'`).Scan(&idxCount); err != nil {
+		t.Fatalf("check legacy index: %v", err)
+	}
+	if idxCount != 0 {
+		t.Errorf("expected idx_submissions_idempotency to be dropped, got %d", idxCount)
+	}
+
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM pg_indexes WHERE indexname = 'idx_submissions_idempotency_v2'`).Scan(&idxCount); err != nil {
+		t.Fatalf("check v2 index: %v", err)
+	}
+	if idxCount != 1 {
+		t.Errorf("expected idx_submissions_idempotency_v2 to remain, got %d", idxCount)
+	}
+}
