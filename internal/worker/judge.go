@@ -61,6 +61,9 @@ func judgeFloat(expected, actual string, epsilon float64) model.Verdict {
 			}
 			continue
 		}
+		if math.IsNaN(e) || math.IsNaN(a) {
+			return model.VerdictWrongAnswer
+		}
 		if math.Abs(e-a) > epsilon {
 			return model.VerdictWrongAnswer
 		}
