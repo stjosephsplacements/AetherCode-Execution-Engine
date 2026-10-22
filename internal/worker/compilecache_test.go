@@ -69,3 +69,80 @@ func TestCompileCacheKeyDeterministic(t *testing.T) {
 		t.Fatal("different languages should produce different keys")
 	}
 }
+
+func BenchmarkCompileCacheGet_Hit(b *testing.B) {
+	c := newCompileCache(time.Hour)
+	key := compileCacheKey("cpp", "int main(){ return 0; }")
+	c.put(key, "file-bench-hit")
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		fid, ok := c.get(key)
+		if !ok || fid != "file-bench-hit" {
+			b.Fatalf("expected hit, got %q ok=%v", fid, ok)
+		}
+	}
+}
+
+func BenchmarkCompileCacheGet_Miss(b *testing.B) {
+	c := newCompileCache(time.Hour)
+	key := "non-existent-key"
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, ok := c.get(key); ok {
+			b.Fatal("expected miss")
+		}
+	}
+}
+
+func BenchmarkCompileCachePut(b *testing.B) {
+	c := newCompileCache(time.Hour)
+	// Pre-generate keys so we only benchmark put
+	keys := make([]string, b.N)
+	for i := 0; i < b.N; i++ {
+		keys[i] = compileCacheKey("cpp", string(rune(i)))
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c.put(keys[i], "file-benchmark-put")
+	}
+}
+
+func BenchmarkCompileCacheEvict_1000Entries(b *testing.B) {
+	b.StopTimer()
+	// Pre-generate keys
+	keys := make([]string, 1000)
+	for i := 0; i < 1000; i++ {
+		keys[i] = compileCacheKey("lang", string(rune(i)))
+	}
+
+	for i := 0; i < b.N; i++ {
+		c := newCompileCache(time.Nanosecond)
+		for j := 0; j < 1000; j++ {
+			c.m[keys[j]] = cacheEntry{
+				fileID:  "expired-file",
+				created: time.Now().Add(-time.Hour),
+			}
+		}
+
+		b.StartTimer()
+		c.evictExpired()
+		b.StopTimer()
+	}
+}
+
+func BenchmarkCompileCacheKey(b *testing.B) {
+	largeSourceBytes := make([]byte, 64*1024)
+	for i := range largeSourceBytes {
+		largeSourceBytes[i] = byte('a' + (i % 26))
+	}
+	largeSource := string(largeSourceBytes)
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = compileCacheKey("python", largeSource)
+	}
+}
+
