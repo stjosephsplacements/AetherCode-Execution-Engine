@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"time"
+
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/requestid"
 )
 
 type Client struct {
@@ -52,6 +54,9 @@ func (c *Client) Run(ctx context.Context, req Request) ([]Result, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+c.authToken)
+	if reqID := requestid.FromContext(ctx); reqID != "" {
+		httpReq.Header.Set("X-Request-Id", reqID)
+	}
 
 	resp, err := c.httpClient.Do(httpReq)
 	if err != nil {
@@ -84,6 +89,9 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 		return "", err
 	}
 	req.Header.Set("Authorization", "Bearer "+c.authToken)
+	if reqID := requestid.FromContext(ctx); reqID != "" {
+		req.Header.Set("X-Request-Id", reqID)
+	}
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("sandbox: version request failed: %w", err)

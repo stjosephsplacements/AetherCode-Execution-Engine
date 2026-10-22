@@ -12,17 +12,11 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/metrics"
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/requestid"
 )
 
-type ctxKey int
-
-const requestIDKey ctxKey = 0
-
 func RequestID(ctx context.Context) string {
-	if id, ok := ctx.Value(requestIDKey).(string); ok {
-		return id
-	}
-	return ""
+	return requestid.FromContext(ctx)
 }
 
 type statusWriter struct {
@@ -57,7 +51,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		id, _ := uuid.NewV7()
 		reqID := id.String()
 
-		ctx := context.WithValue(r.Context(), requestIDKey, reqID)
+		ctx := requestid.WithRequestID(r.Context(), reqID)
 		r = r.WithContext(ctx)
 
 		w.Header().Set("X-Request-Id", reqID)
