@@ -145,4 +145,3 @@ func BenchmarkCompileCacheKey(b *testing.B) {
 		_ = compileCacheKey("python", largeSource)
 	}
 }
-
