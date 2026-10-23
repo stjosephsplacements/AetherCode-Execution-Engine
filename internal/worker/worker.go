@@ -494,7 +494,8 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 				return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run: expected %d results, got %d", len(batch), len(batchResults))
 			}
 
-			for i, r := range batchResults {
+			for i := range batch {
+				r := batchResults[i]
 				testIndex := batchStart + i
 				tc := batch[i]
 				tr := judgeResult(r, testIndex, tc.ExpectedOutput, tc.CheckerType)
