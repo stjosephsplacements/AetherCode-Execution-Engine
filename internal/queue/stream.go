@@ -31,6 +31,12 @@ func NewStream(rdb *redis.Client, stream, group string) *Stream {
 // StreamName returns the Redis stream key.
 func (s *Stream) StreamName() string { return s.stream }
 
+func (s *Stream) ack(ctx context.Context, msgID string) {
+	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	s.rdb.XAck(ackCtx, s.stream, s.group, msgID) //nolint:errcheck // best-effort: ACK failure leaves msg in PEL for reclaimer
+	ackCancel()
+}
+
 // CreateGroup idempotently creates the consumer group and stream.
 func (s *Stream) CreateGroup(ctx context.Context) error {
 	err := s.rdb.XGroupCreateMkStream(ctx, s.stream, s.group, "0").Err()
@@ -89,9 +95,7 @@ func (s *Stream) Consume(ctx context.Context, consumer string, handler func(ctx 
 				subID, ok := msg.Values["submission_id"].(string)
 				if !ok {
 					slog.Error("queue: invalid message, missing submission_id", "id", msg.ID)
-					ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-					s.rdb.XAck(ackCtx, s.stream, s.group, msg.ID)
-					ackCancel()
+					s.ack(ctx, msg.ID)
 					continue
 				}
 
@@ -102,9 +106,7 @@ func (s *Stream) Consume(ctx context.Context, consumer string, handler func(ctx 
 
 				// Use a fresh context for the ACK so a cancelled shutdown ctx does not
 				// silently drop the ACK and leave the message in the PEL.
-				ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				s.rdb.XAck(ackCtx, s.stream, s.group, msg.ID)
-				ackCancel()
+				s.ack(ctx, msg.ID)
 			}
 		}
 	}
@@ -156,6 +158,12 @@ func NewTieredConsumer(rdb *redis.Client, submitStream, runStream, bulkStream, g
 		blockReadTimeout: blockReadTimeout,
 		reclaimMinIdle:   30 * time.Second,
 	}
+}
+
+func (dc *DualConsumer) ack(ctx context.Context, stream, msgID string) {
+	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+	dc.rdb.XAck(ackCtx, stream, dc.group, msgID) //nolint:errcheck // best-effort: ACK failure leaves msg in PEL for reclaimer
+	ackCancel()
 }
 
 // streams returns the slice of configured stream names.
@@ -242,9 +250,7 @@ func (dc *DualConsumer) consumeOne(ctx context.Context, stream, consumer string,
 			subID, ok := msg.Values["submission_id"].(string)
 			if !ok {
 				slog.Error("queue: invalid message", "stream", stream, "id", msg.ID)
-				ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
-				ackCancel()
+				dc.ack(ctx, stream, msg.ID)
 				return true
 			}
 
@@ -253,9 +259,7 @@ func (dc *DualConsumer) consumeOne(ctx context.Context, stream, consumer string,
 				return true // consumed but not ACKed — reclaimer will pick it up
 			}
 
-			ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
-			ackCancel()
+			dc.ack(ctx, stream, msg.ID)
 			return true //nolint:staticcheck // one message per read by design; returning true re-triggers the loop for the remaining messages
 		}
 	}
@@ -296,18 +300,14 @@ func (dc *DualConsumer) blockRead(ctx context.Context, consumer string, handler 
 		for _, msg := range s.Messages {
 			subID, ok := msg.Values["submission_id"].(string)
 			if !ok {
-				ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				dc.rdb.XAck(ackCtx, streamName, dc.group, msg.ID)
-				ackCancel()
+				dc.ack(ctx, streamName, msg.ID)
 				continue
 			}
 			if err := handler(ctx, subID); err != nil {
 				slog.Error("queue: handler error", "stream", streamName, "submission_id", subID, "err", err)
 				continue
 			}
-			ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			dc.rdb.XAck(ackCtx, streamName, dc.group, msg.ID)
-			ackCancel()
+			dc.ack(ctx, streamName, msg.ID)
 		}
 	}
 }
@@ -413,9 +413,7 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 		for _, msg := range msgs {
 			subID, ok := msg.Values["submission_id"].(string)
 			if !ok {
-				ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
-				ackCancel()
+				dc.ack(ctx, stream, msg.ID)
 				continue
 			}
 
@@ -424,8 +422,8 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 					"stream", stream, "submission_id", subID,
 					"msg_id", msg.ID, "delivery_count", deliveryCounts[msg.ID])
 				metrics.PoisonMessagesTotal.Inc()
-				ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				dc.rdb.XAdd(ackCtx, &redis.XAddArgs{
+				dlqCtx, dlqCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+				dc.rdb.XAdd(dlqCtx, &redis.XAddArgs{
 					Stream: "ac:dlq:poison",
 					MaxLen: 10_000,
 					Approx: true,
@@ -437,8 +435,8 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 						"reclaimed_at":   time.Now().UTC().Format(time.RFC3339),
 					},
 				})
-				dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
-				ackCancel()
+				dlqCancel()
+				dc.ack(ctx, stream, msg.ID)
 				continue
 			}
 
@@ -450,9 +448,7 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 				continue
 			}
 
-			ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-			dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
-			ackCancel()
+			dc.ack(ctx, stream, msg.ID)
 		}
 
 		if newCursor == "0-0" {
