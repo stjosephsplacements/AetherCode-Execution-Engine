@@ -23,6 +23,7 @@ func validConfig() Config {
 		RateLimitUnauthPerMinute: 0, // disabled by default
 		RateLimitUnauthBurst:     5,
 		SubmitWeight:             3,
+		BulkWeight:               1,
 		JobTimeout:               90 * time.Second,
 		CompileCacheTTL:          60 * time.Second,
 		BlockReadTimeout:         500 * time.Millisecond,
