@@ -2,10 +2,10 @@ package gateway
 
 import (
 	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,7 +64,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 
 		routeLabel := normalizePath(r.URL.Path)
-		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, routeLabel, fmt.Sprintf("%d", sw.status)).Inc()
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, routeLabel, strconv.Itoa(sw.status)).Inc()
 		metrics.HTTPRequestDuration.WithLabelValues(r.Method, routeLabel).Observe(duration.Seconds())
 
 		level := slog.LevelInfo

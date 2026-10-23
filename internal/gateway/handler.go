@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -321,7 +322,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		if rlResult := h.rateLimiter.Check(ctx, identity.UserID); !rlResult.Allowed {
 			metrics.RateLimitRejections.WithLabelValues("user").Inc()
 			retryAfter := int(math.Ceil(rlResult.RetryAfter.Seconds()))
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
@@ -333,7 +334,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		if rlResult := h.unauthLimiter.CheckIP(ctx, remoteIP(r)); !rlResult.Allowed {
 			metrics.RateLimitRejections.WithLabelValues("ip").Inc()
 			retryAfter := int(math.Ceil(rlResult.RetryAfter.Seconds()))
-			w.Header().Set("Retry-After", fmt.Sprintf("%d", retryAfter))
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
 			jsonError(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}
