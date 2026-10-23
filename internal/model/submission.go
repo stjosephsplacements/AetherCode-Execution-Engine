@@ -84,10 +84,10 @@ func ValidPriority(s string) bool {
 }
 
 // ValidChecker reports whether s names a supported checker. The empty string
-// is valid and means exact.
+// is valid and means exact. Custom checkers can be specified as "custom" or when checker code is provided.
 func ValidChecker(s string) bool {
 	switch s {
-	case "", CheckerExact, CheckerToken, CheckerFloat:
+	case "", CheckerExact, CheckerToken, CheckerFloat, "custom":
 		return true
 	}
 	return false

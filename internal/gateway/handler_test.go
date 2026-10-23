@@ -376,7 +376,7 @@ func TestHandleExecute_RejectsUnknownChecker(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode body %q: %v", rec.Body.String(), err)
 	}
-	if resp.Error != "checker must be one of: exact, token, float" {
+	if resp.Error != "checker must be one of: exact, token, float, custom" {
 		t.Errorf("error = %q", resp.Error)
 	}
 }

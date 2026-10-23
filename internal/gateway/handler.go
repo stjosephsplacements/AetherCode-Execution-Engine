@@ -120,8 +120,11 @@ type executeRequest struct {
 	// Optional limits; omitted means the language defaults.
 	TimeLimitMs   *uint64 `json:"time_limit_ms"`
 	MemoryLimitKb *uint64 `json:"memory_limit_kb"`
-	// Optional output checker: exact (default), token or float.
+	// Optional output checker: exact (default), token, float, or custom.
 	Checker string `json:"checker"`
+	// Optional custom checker source code and language (e.g. "python", "cpp").
+	CheckerCode     string `json:"checker_code,omitempty"`
+	CheckerLanguage string `json:"checker_language,omitempty"`
 	// Optional priority tier: "run" (default / interactive), "submit" (contest / assessment), or "bulk" (batch re-judge).
 	Priority string `json:"priority"`
 
@@ -207,8 +210,26 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if !model.ValidChecker(req.Checker) {
-		jsonError(w, "checker must be one of: exact, token, float", http.StatusBadRequest)
+		jsonError(w, "checker must be one of: exact, token, float, custom", http.StatusBadRequest)
 		return
+	}
+	if req.Checker == "custom" || req.CheckerCode != "" {
+		if req.CheckerCode == "" {
+			jsonError(w, "checker_code is required when checker is custom", http.StatusBadRequest)
+			return
+		}
+		if len(req.CheckerCode) > maxSourceSize {
+			jsonError(w, "checker_code exceeds 64KB", http.StatusBadRequest)
+			return
+		}
+		if req.CheckerLanguage == "" {
+			req.CheckerLanguage = "python" // default checker language
+		}
+		if _, ok := sandbox.Languages[req.CheckerLanguage]; !ok {
+			jsonError(w, "unsupported checker_language", http.StatusBadRequest)
+			return
+		}
+		req.Checker = "custom"
 	}
 	if !model.ValidPriority(req.Priority) {
 		jsonError(w, "priority must be one of: run, submit, bulk", http.StatusBadRequest)
@@ -335,7 +356,14 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queuedEvt := eventlog.New(jobID.String(), eventlog.EventQueued, nil)
-	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), queue.TestSet{Tests: tests, Limits: limits, Checker: req.Checker}, queuedEvt, targetStream.StreamName()); err != nil {
+	testSet := queue.TestSet{
+		Tests:           tests,
+		Limits:          limits,
+		Checker:         req.Checker,
+		CheckerCode:     req.CheckerCode,
+		CheckerLanguage: req.CheckerLanguage,
+	}
+	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), testSet, queuedEvt, targetStream.StreamName()); err != nil {
 		slog.Error("enqueue failed", "submission_id", jobID, "err", err)
 		jsonError(w, "internal error", http.StatusInternalServerError)
 		return
