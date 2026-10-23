@@ -28,10 +28,78 @@ func judgeExact(expected, actual string) model.Verdict {
 	return model.VerdictWrongAnswer
 }
 
+// nextEffectiveLine scans string s starting at offset and yields the start and end indices of the next
+// non-empty, trailing-whitespace-trimmed line. It handles CRLF, lone CR, and lone LF.
+// If no non-empty lines remain before the end of s, it returns -1, -1, len(s).
+func nextEffectiveLine(s string, offset int) (lineStart, lineEnd, nextOffset int) {
+	n := len(s)
+	cur := offset
+
+	for cur < n {
+		start := cur
+		trailingWS := -1
+
+		// Scan until newline or end
+		for cur < n && s[cur] != '\n' && s[cur] != '\r' {
+			if s[cur] == ' ' || s[cur] == '\t' {
+				if trailingWS < 0 {
+					trailingWS = cur
+				}
+			} else {
+				trailingWS = -1
+			}
+			cur++
+		}
+
+		end := cur
+		if trailingWS >= 0 {
+			end = trailingWS
+		}
+
+		// Advance past newline sequence (\r\n, \r, or \n)
+		if cur < n {
+			switch s[cur] {
+			case '\r':
+				cur++
+				if cur < n && s[cur] == '\n' {
+					cur++
+				}
+			case '\n':
+				cur++
+			}
+		}
+
+		// If line has non-whitespace characters, return it
+		if end > start {
+			return start, end, cur
+		}
+	}
+
+	return -1, -1, n
+}
+
 // equalNormalized compares expected and actual outputs line-by-line in a single pass
-// without allocating strings for intermediate normalized outputs.
+// with zero memory allocations, avoiding intermediate string or slice allocations.
 func equalNormalized(expected, actual string) bool {
-	return normalizeOutput(expected) == normalizeOutput(actual)
+	expOff, actOff := 0, 0
+	for {
+		eStart, eEnd, nextExp := nextEffectiveLine(expected, expOff)
+		aStart, aEnd, nextAct := nextEffectiveLine(actual, actOff)
+
+		if eStart == -1 && aStart == -1 {
+			return true
+		}
+		if eStart == -1 || aStart == -1 {
+			return false
+		}
+
+		if expected[eStart:eEnd] != actual[aStart:aEnd] {
+			return false
+		}
+
+		expOff = nextExp
+		actOff = nextAct
+	}
 }
 
 // nextToken scans string s starting at offset and returns the start and end indices of the next whitespace-delimited token.
