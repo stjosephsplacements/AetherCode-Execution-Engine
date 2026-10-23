@@ -68,6 +68,7 @@ type Handler struct {
 	pool                   *pgxpool.Pool
 	submitStream           *queue.Stream
 	runStream              *queue.Stream
+	bulkStream             *queue.Stream
 	pubsub                 *queue.PubSub
 	judge                  *sandbox.Client
 	rdb                    *redis.Client
@@ -80,10 +81,16 @@ type Handler struct {
 }
 
 func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int) *Handler {
+	return NewTieredHandler(pool, submitStream, runStream, nil, pubsub, judge, rdb, rateLimiter, unauthLimiter, admissionMaxQueueDepth, workerCount)
+}
+
+// NewTieredHandler creates a Handler with full 3-tier priority stream support.
+func NewTieredHandler(pool *pgxpool.Pool, submitStream, runStream, bulkStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int) *Handler {
 	return &Handler{
 		pool:                   pool,
 		submitStream:           submitStream,
 		runStream:              runStream,
+		bulkStream:             bulkStream,
 		pubsub:                 pubsub,
 		judge:                  judge,
 		rdb:                    rdb,
@@ -115,6 +122,8 @@ type executeRequest struct {
 	MemoryLimitKb *uint64 `json:"memory_limit_kb"`
 	// Optional output checker: exact (default), token or float.
 	Checker string `json:"checker"`
+	// Optional priority tier: "run" (default / interactive), "submit" (contest / assessment), or "bulk" (batch re-judge).
+	Priority string `json:"priority"`
 
 	// Mode and ProblemVersionID exist only to reject legacy submit-mode requests.
 	Mode             string  `json:"mode"`
@@ -201,6 +210,10 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "checker must be one of: exact, token, float", http.StatusBadRequest)
 		return
 	}
+	if !model.ValidPriority(req.Priority) {
+		jsonError(w, "priority must be one of: run, submit, bulk", http.StatusBadRequest)
+		return
+	}
 
 	var limits sandbox.RunLimits
 	if req.TimeLimitMs != nil {
@@ -242,6 +255,16 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	targetStream := h.runStream
+	switch req.Priority {
+	case model.PriorityContest:
+		if h.submitStream != nil {
+			targetStream = h.submitStream
+		}
+	case model.PriorityBulk:
+		if h.bulkStream != nil {
+			targetStream = h.bulkStream
+		}
+	}
 
 	// Admission control — reject if queue is too deep
 	admitted, err := ratelimit.AdmissionCheck(ctx, h.rdb, targetStream.StreamName(), h.admissionMaxQueueDepth)
@@ -386,7 +409,14 @@ func (h *Handler) HandleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	queues := map[string]int64{}
-	for _, s := range []*queue.Stream{h.submitStream, h.runStream} {
+	streamsToCheck := []*queue.Stream{h.submitStream, h.runStream}
+	if h.bulkStream != nil {
+		streamsToCheck = append(streamsToCheck, h.bulkStream)
+	}
+	for _, s := range streamsToCheck {
+		if s == nil {
+			continue
+		}
 		name := s.StreamName()
 		length, err := h.rdb.XLen(ctx, name).Result()
 		if err == nil {

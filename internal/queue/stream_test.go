@@ -102,6 +102,60 @@ func TestDualConsumer_WeightedFairQueuing(t *testing.T) {
 	}
 }
 
+func TestTieredConsumer_ThreePriorityStreams(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	const submitStream = "ac:sub:tiered"
+	const runStream = "ac:run:tiered"
+	const bulkStream = "ac:bulk:tiered"
+	const group = "workers"
+
+	tc := NewTieredConsumer(rdb, submitStream, runStream, bulkStream, group, 2, 1, 200*time.Millisecond)
+	if err := tc.CreateGroups(ctx); err != nil {
+		t.Fatalf("CreateGroups: %v", err)
+	}
+
+	// Enqueue 2 submit, 1 run, 1 bulk
+	rdb.XAdd(ctx, &goredis.XAddArgs{Stream: submitStream, Values: map[string]any{"submission_id": "s0"}})
+	rdb.XAdd(ctx, &goredis.XAddArgs{Stream: submitStream, Values: map[string]any{"submission_id": "s1"}})
+	rdb.XAdd(ctx, &goredis.XAddArgs{Stream: runStream, Values: map[string]any{"submission_id": "r0"}})
+	rdb.XAdd(ctx, &goredis.XAddArgs{Stream: bulkStream, Values: map[string]any{"submission_id": "b0"}})
+
+	var subCnt, runCnt, bulkCnt atomic.Int32
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		tc.Consume(ctx, "w0", func(_ context.Context, id string) error {
+			switch id[0] {
+			case 's':
+				subCnt.Add(1)
+			case 'r':
+				runCnt.Add(1)
+			case 'b':
+				bulkCnt.Add(1)
+			}
+			if subCnt.Load()+runCnt.Load()+bulkCnt.Load() >= 4 {
+				cancel()
+			}
+			return nil
+		})
+	}()
+	wg.Wait()
+
+	if subCnt.Load() != 2 {
+		t.Errorf("subCnt = %d, want 2", subCnt.Load())
+	}
+	if runCnt.Load() != 1 {
+		t.Errorf("runCnt = %d, want 1", runCnt.Load())
+	}
+	if bulkCnt.Load() != 1 {
+		t.Errorf("bulkCnt = %d, want 1", bulkCnt.Load())
+	}
+}
+
 func TestDualConsumer_CreateGroups_Idempotent(t *testing.T) {
 	_, rdb := newTestRedis(t)
 	ctx := context.Background()

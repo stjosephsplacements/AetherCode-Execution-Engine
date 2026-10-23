@@ -110,36 +110,65 @@ func (s *Stream) Consume(ctx context.Context, consumer string, handler func(ctx 
 	}
 }
 
-// DualConsumer reads from two streams with weighted priority.
-// submitWeight controls how many submit messages to try before one run message.
+// DualConsumer reads from priority streams with weighted fair queuing.
+// Priority tiers:
+// - runStream: interactive user runs (P0)
+// - submitStream: formal contest/assessment submissions (P1)
+// - bulkStream: bulk re-evaluations and batch jobs (P2)
+//
+// submitWeight controls how many submit messages to try in the cycle.
+// bulkWeight controls how many bulk messages to try in the cycle.
 type DualConsumer struct {
 	rdb              *redis.Client
 	submitStream     string
 	runStream        string
+	bulkStream       string
 	group            string
 	submitWeight     int
+	bulkWeight       int
 	blockReadTimeout time.Duration
 	reclaimMinIdle   time.Duration // how long a message must be idle before reclaim; defaults to 30s
 }
 
 func NewDualConsumer(rdb *redis.Client, submitStream, runStream, group string, submitWeight int, blockReadTimeout time.Duration) *DualConsumer {
+	return NewTieredConsumer(rdb, submitStream, runStream, "", group, submitWeight, 1, blockReadTimeout)
+}
+
+// NewTieredConsumer constructs a consumer reading up to three priority streams.
+func NewTieredConsumer(rdb *redis.Client, submitStream, runStream, bulkStream, group string, submitWeight, bulkWeight int, blockReadTimeout time.Duration) *DualConsumer {
 	if blockReadTimeout <= 0 {
 		blockReadTimeout = 500 * time.Millisecond
+	}
+	if submitWeight <= 0 {
+		submitWeight = 3
+	}
+	if bulkWeight <= 0 {
+		bulkWeight = 1
 	}
 	return &DualConsumer{
 		rdb:              rdb,
 		submitStream:     submitStream,
 		runStream:        runStream,
+		bulkStream:       bulkStream,
 		group:            group,
 		submitWeight:     submitWeight,
+		bulkWeight:       bulkWeight,
 		blockReadTimeout: blockReadTimeout,
 		reclaimMinIdle:   30 * time.Second,
 	}
 }
 
-// CreateGroups idempotently creates consumer groups on both streams.
+// streams returns the slice of configured stream names.
+func (dc *DualConsumer) streams() []string {
+	if dc.bulkStream != "" {
+		return []string{dc.submitStream, dc.runStream, dc.bulkStream}
+	}
+	return []string{dc.submitStream, dc.runStream}
+}
+
+// CreateGroups idempotently creates consumer groups on all configured streams.
 func (dc *DualConsumer) CreateGroups(ctx context.Context) error {
-	for _, stream := range []string{dc.submitStream, dc.runStream} {
+	for _, stream := range dc.streams() {
 		err := dc.rdb.XGroupCreateMkStream(ctx, stream, dc.group, "0").Err()
 		if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 			return fmt.Errorf("queue: create group on %s: %w", stream, err)
@@ -148,9 +177,9 @@ func (dc *DualConsumer) CreateGroups(ctx context.Context) error {
 	return nil
 }
 
-// Consume implements weighted fair queuing: try submitWeight messages from
-// the submit stream, then 1 from the run stream. If both are empty, block
-// on submit for 2s before retrying.
+// Consume implements weighted fair queuing across priority streams:
+// try submitWeight messages from submitStream, 1 from runStream, and bulkWeight from bulkStream.
+// If all streams are empty, block on all streams before retrying.
 func (dc *DualConsumer) Consume(ctx context.Context, consumer string, handler func(ctx context.Context, submissionID string) error) {
 	for {
 		if ctx.Err() != nil {
@@ -159,7 +188,7 @@ func (dc *DualConsumer) Consume(ctx context.Context, consumer string, handler fu
 
 		processed := false
 
-		// Try submit stream (high priority)
+		// Try submit stream (high priority: P1 contest / assessment)
 		for range dc.submitWeight {
 			if dc.consumeOne(ctx, dc.submitStream, consumer, handler) {
 				processed = true
@@ -168,13 +197,24 @@ func (dc *DualConsumer) Consume(ctx context.Context, consumer string, handler fu
 			}
 		}
 
-		// Try run stream (lower priority)
+		// Try run stream (interactive user runs: P0)
 		if dc.consumeOne(ctx, dc.runStream, consumer, handler) {
 			processed = true
 		}
 
+		// Try bulk stream (bulk re-evaluations: P2)
+		if dc.bulkStream != "" {
+			for range dc.bulkWeight {
+				if dc.consumeOne(ctx, dc.bulkStream, consumer, handler) {
+					processed = true
+				} else {
+					break
+				}
+			}
+		}
+
 		if !processed {
-			// Both empty — block-wait on submit stream to avoid busy-loop
+			// All streams empty — block-wait across streams to avoid busy-loop
 			dc.blockRead(ctx, consumer, handler)
 		}
 	}
@@ -227,10 +267,17 @@ func (dc *DualConsumer) blockRead(ctx context.Context, consumer string, handler 
 		return
 	}
 
+	streamNames := dc.streams()
+	streamsArg := make([]string, len(streamNames)*2)
+	copy(streamsArg, streamNames)
+	for i := range streamNames {
+		streamsArg[len(streamNames)+i] = ">"
+	}
+
 	msgs, err := dc.rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 		Group:    dc.group,
 		Consumer: consumer,
-		Streams:  []string{dc.submitStream, dc.runStream, ">", ">"},
+		Streams:  streamsArg,
 		Count:    1,
 		Block:    dc.blockReadTimeout,
 	}).Result()
@@ -298,8 +345,9 @@ func (dc *DualConsumer) runReclaimer(ctx context.Context, handler func(ctx conte
 		case <-ctx.Done():
 			return false
 		case <-ticker.C:
-			dc.reclaimStream(ctx, dc.submitStream, handler)
-			dc.reclaimStream(ctx, dc.runStream, handler)
+			for _, stream := range dc.streams() {
+				dc.reclaimStream(ctx, stream, handler)
+			}
 		}
 	}
 }

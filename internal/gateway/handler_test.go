@@ -443,6 +443,42 @@ func TestHandleExecute_RequiresTests(t *testing.T) {
 	assertExecuteError(t, rec, http.StatusBadRequest, "at least one test is required")
 }
 
+func TestHandleExecute_PriorityTiers(t *testing.T) {
+	judgeSrv := fakeJudgeServer(t, "1.13.0")
+	judge := sandbox.NewClient(judgeSrv.URL, "test-token")
+	_, rdb := newTestRedis(t)
+	pool := newFakePGPool(t)
+
+	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
+	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
+	bulkStream := queue.NewStream(rdb, "ac:submissions:bulk", "workers")
+	h := NewTieredHandler(pool, submitStream, runStream, bulkStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8)
+
+	// Invalid priority is rejected with 400
+	rec := postExecute(h, `{"language":"python","source_code":"print(1)","priority":"invalid","tests":[{"input":"","expected_output":"1"}]}`)
+	assertExecuteError(t, rec, http.StatusBadRequest, "priority must be one of: run, submit, bulk")
+
+	// P2 bulk priority routes to bulkStream
+	recBulk := postExecute(h, `{"language":"python","source_code":"print(1)","priority":"bulk","tests":[{"input":"","expected_output":"1"}]}`)
+	if recBulk.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for bulk priority, got %d: %s", recBulk.Code, recBulk.Body.String())
+	}
+	nBulk, _ := rdb.XLen(context.Background(), "ac:submissions:bulk").Result()
+	if nBulk != 1 {
+		t.Errorf("expected 1 item in bulk stream, got %d", nBulk)
+	}
+
+	// P1 submit priority routes to submitStream
+	recSubmit := postExecute(h, `{"language":"python","source_code":"print(1)","priority":"submit","tests":[{"input":"","expected_output":"1"}]}`)
+	if recSubmit.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for submit priority, got %d: %s", recSubmit.Code, recSubmit.Body.String())
+	}
+	nSub, _ := rdb.XLen(context.Background(), "ac:submissions:submit").Result()
+	if nSub != 1 {
+		t.Errorf("expected 1 item in submit stream, got %d", nSub)
+	}
+}
+
 func postExecute(h *Handler, body string) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/execute", strings.NewReader(body))

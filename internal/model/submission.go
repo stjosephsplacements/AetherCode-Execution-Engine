@@ -67,6 +67,22 @@ const (
 	CheckerFloat = "float"
 )
 
+// Priority tier names for multi-tiered job streams.
+const (
+	PriorityInteractive = "run"    // P0: interactive code runner (default)
+	PriorityContest     = "submit" // P1: contest & assessment submission
+	PriorityBulk        = "bulk"   // P2: bulk batch re-judging & backfills
+)
+
+// ValidPriority reports whether s is a valid priority tier. The empty string is valid and defaults to PriorityInteractive ("run").
+func ValidPriority(s string) bool {
+	switch s {
+	case "", PriorityInteractive, PriorityContest, PriorityBulk:
+		return true
+	}
+	return false
+}
+
 // ValidChecker reports whether s names a supported checker. The empty string
 // is valid and means exact.
 func ValidChecker(s string) bool {

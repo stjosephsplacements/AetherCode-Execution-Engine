@@ -105,15 +105,16 @@ func main() {
 
 	submitStream := queue.NewStream(rdb, cfg.SubmitStreamName, cfg.ConsumerGroup)
 	runStream := queue.NewStream(rdb, cfg.RunStreamName, cfg.ConsumerGroup)
+	bulkStream := queue.NewStream(rdb, cfg.BulkStreamName, cfg.ConsumerGroup)
 
-	dualConsumer := queue.NewDualConsumer(rdb, cfg.SubmitStreamName, cfg.RunStreamName, cfg.ConsumerGroup, cfg.SubmitWeight, cfg.BlockReadTimeout)
+	dualConsumer := queue.NewTieredConsumer(rdb, cfg.SubmitStreamName, cfg.RunStreamName, cfg.BulkStreamName, cfg.ConsumerGroup, cfg.SubmitWeight, cfg.BulkWeight, cfg.BlockReadTimeout)
 	if err := dualConsumer.CreateGroups(ctx); err != nil {
 		slog.Error("redis stream group creation failed", "err", err)
 		os.Exit(1)
 	}
 	slog.Info("redis streams ready",
-		"submit", cfg.SubmitStreamName, "run", cfg.RunStreamName,
-		"group", cfg.ConsumerGroup, "weight", cfg.SubmitWeight)
+		"submit", cfg.SubmitStreamName, "run", cfg.RunStreamName, "bulk", cfg.BulkStreamName,
+		"group", cfg.ConsumerGroup, "submit_weight", cfg.SubmitWeight, "bulk_weight", cfg.BulkWeight)
 
 	pubsub := queue.NewPubSub(rdb)
 
@@ -134,7 +135,7 @@ func main() {
 	bgWg.Add(1)
 	go func() {
 		defer bgWg.Done()
-		scrapeQueueDepth(ctx, rdb, cfg.SubmitStreamName, cfg.RunStreamName)
+		scrapeQueueDepth(ctx, rdb, cfg.SubmitStreamName, cfg.RunStreamName, cfg.BulkStreamName)
 	}()
 
 	bgWg.Add(1)
@@ -153,7 +154,7 @@ func main() {
 
 	// HTTP Gateway
 	mux := http.NewServeMux()
-	h := gateway.NewHandler(pool, submitStream, runStream, pubsub, judge, rdb, rl, unauthRL, cfg.AdmissionMaxQueueDepth, cfg.WorkerCount)
+	h := gateway.NewTieredHandler(pool, submitStream, runStream, bulkStream, pubsub, judge, rdb, rl, unauthRL, cfg.AdmissionMaxQueueDepth, cfg.WorkerCount)
 	h.Register(mux)
 
 	var handler http.Handler = mux
@@ -312,10 +313,12 @@ func reapOrphans(ctx context.Context, pool *pgxpool.Pool, runStream *queue.Strea
 	}
 }
 
-func scrapeQueueDepth(ctx context.Context, rdb *redis.Client, submitStream, runStream string) {
-	streams := []string{submitStream, runStream}
+func scrapeQueueDepth(ctx context.Context, rdb *redis.Client, streams ...string) {
 	scrape := func() {
 		for _, stream := range streams {
+			if stream == "" {
+				continue
+			}
 			length, err := rdb.XLen(ctx, stream).Result()
 			if err == nil {
 				metrics.QueueDepth.WithLabelValues(stream).Set(float64(length))
