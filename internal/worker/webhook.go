@@ -32,22 +32,22 @@ type WebhookPayload struct {
 // target of an outbound webhook request. Covers loopback, RFC-1918 private,
 // link-local (including cloud-metadata 169.254.169.254), and IPv6 equivalents.
 var ssrfBlockedPrefixes = []netip.Prefix{
-	netip.MustParsePrefix("127.0.0.0/8"),          // IPv4 loopback
-	netip.MustParsePrefix("10.0.0.0/8"),            // RFC-1918 private
-	netip.MustParsePrefix("172.16.0.0/12"),         // RFC-1918 private
-	netip.MustParsePrefix("192.168.0.0/16"),        // RFC-1918 private
-	netip.MustParsePrefix("169.254.0.0/16"),        // link-local / cloud metadata
-	netip.MustParsePrefix("100.64.0.0/10"),         // CGNAT (RFC 6598)
-	netip.MustParsePrefix("192.0.0.0/24"),          // IETF protocol assignments
-	netip.MustParsePrefix("198.18.0.0/15"),         // benchmarking (RFC 2544)
-	netip.MustParsePrefix("198.51.100.0/24"),       // TEST-NET-2 (RFC 5737)
-	netip.MustParsePrefix("203.0.113.0/24"),        // TEST-NET-3 (RFC 5737)
-	netip.MustParsePrefix("240.0.0.0/4"),           // reserved
-	netip.MustParsePrefix("::1/128"),               // IPv6 loopback
-	netip.MustParsePrefix("fc00::/7"),              // IPv6 unique local (RFC 4193)
-	netip.MustParsePrefix("fe80::/10"),             // IPv6 link-local
-	netip.MustParsePrefix("64:ff9b::/96"),          // NAT64 well-known prefix (RFC 6052)
-	netip.MustParsePrefix("64:ff9b:1::/48"),        // NAT64 local-use prefix (RFC 8215)
+	netip.MustParsePrefix("127.0.0.0/8"),     // IPv4 loopback
+	netip.MustParsePrefix("10.0.0.0/8"),      // RFC-1918 private
+	netip.MustParsePrefix("172.16.0.0/12"),   // RFC-1918 private
+	netip.MustParsePrefix("192.168.0.0/16"),  // RFC-1918 private
+	netip.MustParsePrefix("169.254.0.0/16"),  // link-local / cloud metadata
+	netip.MustParsePrefix("100.64.0.0/10"),   // CGNAT (RFC 6598)
+	netip.MustParsePrefix("192.0.0.0/24"),    // IETF protocol assignments
+	netip.MustParsePrefix("198.18.0.0/15"),   // benchmarking (RFC 2544)
+	netip.MustParsePrefix("198.51.100.0/24"), // TEST-NET-2 (RFC 5737)
+	netip.MustParsePrefix("203.0.113.0/24"),  // TEST-NET-3 (RFC 5737)
+	netip.MustParsePrefix("240.0.0.0/4"),     // reserved
+	netip.MustParsePrefix("::1/128"),         // IPv6 loopback
+	netip.MustParsePrefix("fc00::/7"),        // IPv6 unique local (RFC 4193)
+	netip.MustParsePrefix("fe80::/10"),       // IPv6 link-local
+	netip.MustParsePrefix("64:ff9b::/96"),    // NAT64 well-known prefix (RFC 6052)
+	netip.MustParsePrefix("64:ff9b:1::/48"),  // NAT64 local-use prefix (RFC 8215)
 }
 
 // errSSRFBlocked is returned by the custom dialer when the resolved address is

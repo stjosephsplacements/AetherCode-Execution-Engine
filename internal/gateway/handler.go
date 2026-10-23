@@ -443,7 +443,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		InteractorLanguage: req.InteractorLanguage,
 		Files:              req.Files,
 		CompilerFlags:      req.CompilerFlags,
-		CallbackURL: req.CallbackURL,
+		CallbackURL:        req.CallbackURL,
 		// CallbackSecret is validated above (length cap). Encryption at rest
 		// before writing to Redis is handled by the pubsub layer (F18/F8).
 		CallbackSecret: req.CallbackSecret,
