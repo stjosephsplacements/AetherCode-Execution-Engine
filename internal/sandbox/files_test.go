@@ -52,7 +52,7 @@ func TestValidateFiles(t *testing.T) {
 	}
 
 	absolute := map[string]string{
-		"/etc/passwd": "root:x:0:0",
+		"/etc/hosts": "127.0.0.1 localhost",
 	}
 	if err := ValidateFiles(absolute, 10, 128<<10); err == nil {
 		t.Errorf("expected error for absolute path, got nil")

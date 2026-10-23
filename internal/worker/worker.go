@@ -337,10 +337,6 @@ func jobBudget(lang sandbox.LangConfig, limits sandbox.RunLimits, tests int) tim
 	return time.Duration(total) + 15*time.Second //nolint:gosec // G115: total is a bounded ns budget, far below MaxInt64
 }
 
-func (w *Worker) compile(ctx context.Context, lang sandbox.LangConfig, sourceCode string) (*sandbox.Result, error) {
-	return w.compileWithOptions(ctx, lang, sourceCode, nil, nil)
-}
-
 func (w *Worker) compileWithOptions(ctx context.Context, lang sandbox.LangConfig, sourceCode string, files map[string]string, compilerFlags []string) (*sandbox.Result, error) {
 	cmd := sandbox.BuildCompileCmdWithOptions(lang, sourceCode, files, compilerFlags)
 	results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cmd}})
