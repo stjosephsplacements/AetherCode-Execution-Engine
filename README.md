@@ -64,9 +64,14 @@ An enterprise-grade, high-throughput, on-premise distributed code execution and 
 - **Multi-Tenant Isolation and Sandbox Boundary:** Submissions execute within secure, unprivileged containers backed by `go-judge`. Every execution is bounded by Linux cgroups v2 (CPU time, memory quotas, swap isolation), PID limits, wall-clock watchdog timers, read-only root filesystems, and syscall filters.
 - **Real-Time Streaming Lifecycle via SSE:** Clients receive immediate feedback across state changes (`QUEUED`, `COMPILING`, `RUNNING`, `TEST_RESULT`, `VERDICT`) over an efficient HTTP Server-Sent Events channel with automatic reconnect resilience and replay buffers.
 - **Zero-Allocation Stream Output Evaluation:** Output evaluation (`exact`, `token`, `float`) runs through an in-place whitespace scanner that executes with zero heap allocations and 0 B/op memory footprint.
+- **Interactive Problems Support:** Full bidirectional inter-process communication (`pipeMapping`) connects student solutions with reactive interactor binaries live in the sandbox.
+- **Multi-File Projects & Whitelisted Compiler Flags:** Supports multi-file project archives with strict path traversal validation and fine-grained compiler optimization flags (`-O3`, `-std=c++20`).
+- **Custom Interactive Checkers:** Supports special judges and `testlib.h`-style checkers in C++, Python, or Go with SHA-256 binary caching.
+- **HMAC-Signed Webhooks:** Provides automated asynchronous webhook callbacks (`X-AetherCode-Signature`) with exponential retries for bulk evaluations.
+- **Prepared Statement Caching & Query Pipelining:** Configured with `pgx.QueryExecModeCacheDescribe` on all database pools, eliminating redundant query planning and parsing round-trips.
 - **Dead-Letter Queue (DLQ) Stream Routing:** Failed submissions exceeding maximum retry thresholds are automatically extracted by background reclaimers and deposited into a dedicated `ac:dlq:poison` Redis stream for forensic inspection.
 - **Compilation Artifact Caching:** Compiled binaries (C, C++, Go, Java) are deduplicated by cryptographic SHA-256 hashes and cached across worker nodes, eliminating redundant compile cycles and reducing p95 latency by up to 1,200 ms.
-- **Weighted Fair Queuing (WFQ):** Redis 7 Streams utilize a weighted consumer model (`ac:submissions:run` and `ac:submissions:submit`) preventing background batch workloads from starving interactive user test runs.
+- **3-Tier Weighted Fair Queuing (WFQ):** Redis 7 Streams utilize a weighted consumer model (`ac:submissions:run`, `ac:submissions:submit`, and `ac:submissions:bulk`) preventing background batch workloads from starving interactive user test runs.
 - **Atomic State Persistence:** PostgreSQL 18 state transitions use Compare-And-Swap (CAS) semantics, preventing race conditions, duplicate grading runs, and inconsistent terminal states.
 
 ---
@@ -289,12 +294,21 @@ Submit code for evaluation against test cases.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `language` | string | Yes | Supported language key: `c`, `cpp`, `java`, `go`, `python`, `javascript`, `sqlite` |
-| `source_code` | string | Yes | Source text up to 64 KB |
+| `language` | string | Yes | Supported language key: `c`, `cpp`, `java`, `go`, `python`, `javascript`, `sqlite`, etc. |
+| `source_code` | string | Yes | Primary source text up to 64 KB |
 | `tests` | array | Yes | Array of 1 to 100 test objects |
 | `tests[].input` | string | Yes | Test standard input (max 8 MB per test) |
 | `tests[].expected_output` | string | Yes | Expected test standard output (max 8 MB per test) |
-| `checker` | string | No | Output comparison mode: `exact` (default), `token`, or `float` |
+| `checker` | string | No | Output comparison mode: `exact` (default), `token`, `float`, or `custom` |
+| `checker_code` | string | No | Custom checker source code (required when `checker: "custom"`, max 64 KB) |
+| `checker_language` | string | No | Custom checker language (defaults to `python`) |
+| `interactor_code` | string | No | Interactor source code for bidirectional interactive problems (max 64 KB) |
+| `interactor_language` | string | No | Interactor language (defaults to `python`) |
+| `files` | object | No | Multi-file submission map `{"helper.h": "...", "sol.cpp": "..."}` (max 10 files, 128 KB total) |
+| `compiler_flags` | array | No | Whitelisted optimization/standard flags (`["-O3", "-std=c++20"]`) |
+| `callback_url` | string | No | Optional HTTP/HTTPS webhook URL for asynchronous completion callback |
+| `callback_secret` | string | No | Optional HMAC-SHA256 signature secret for webhook validation |
+| `priority` | string | No | Priority tier: `run` (P0 default), `submit` (P1), or `bulk` (P2) |
 | `time_limit_ms` | integer | No | Per-test CPU time ceiling in milliseconds (100 to 20000) |
 | `memory_limit_kb` | integer | No | Per-test memory ceiling in kilobytes (16384 to 2097152) |
 | `idempotency_key` | string | No | Client key; duplicate submissions return the original job identifier |
