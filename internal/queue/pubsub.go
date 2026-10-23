@@ -36,6 +36,8 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"checker_language", set.CheckerLanguage,
 			"interactor_code", set.InteractorCode,
 			"interactor_language", set.InteractorLanguage,
+			"callback_url", set.CallbackURL,
+			"callback_secret", set.CallbackSecret,
 		)
 		if len(set.Files) > 0 {
 			if filesJSON, err := json.Marshal(set.Files); err == nil {
@@ -229,6 +231,8 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 		InteractorLanguage: fields["interactor_language"],
 		Files:              files,
 		CompilerFlags:      compilerFlags,
+		CallbackURL:        fields["callback_url"],
+		CallbackSecret:     fields["callback_secret"],
 	}, nil
 }
 
@@ -249,4 +253,6 @@ type TestSet struct {
 	InteractorLanguage string            // optional interactive interactor language ("cpp", "python")
 	Files              map[string]string // optional multi-file sources/headers
 	CompilerFlags      []string          // optional whitelisted compiler flags
+	CallbackURL        string            // optional webhook notification callback URL
+	CallbackSecret     string            // optional HMAC signing secret for webhook
 }

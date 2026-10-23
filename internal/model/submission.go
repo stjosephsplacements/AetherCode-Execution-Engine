@@ -56,6 +56,7 @@ type TestResult struct {
 	Verdict       Verdict
 	CPUTimeNs     int64
 	MemoryBytes   int64
+	RunTimeNs     int64
 	StdoutPreview string
 	StderrPreview string
 }

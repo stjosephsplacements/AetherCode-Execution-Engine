@@ -163,7 +163,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	}()
 
 	// Load the job's tests and limits from Redis
-	tests, limits, extraFiles, compilerFlags, err := w.loadTests(jobCtx, submissionID)
+	tests, limits, extraFiles, compilerFlags, callbackURL, callbackSecret, err := w.loadTests(jobCtx, submissionID)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("load tests: %v", err), log)
 	}
@@ -283,6 +283,19 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		log.Error("failed to publish VERDICT event (DB has verdict, SSE client may not)", "err", err)
 	}
 
+	if callbackURL != "" {
+		go dispatchWebhook(context.WithoutCancel(ctx), callbackURL, callbackSecret, WebhookPayload{
+			SubmissionID: submissionID,
+			Verdict:      string(overallVerdict),
+			TestsPassed:  passed,
+			TestCount:    len(tests),
+			CPUTimeNs:    totalCPU,
+			MemoryBytes:  peakMem,
+			Timestamp:    time.Now().UTC(),
+			Results:      eventResults,
+		}, log)
+	}
+
 	finalVerdict = string(overallVerdict)
 	metrics.JobsProcessedTotal.WithLabelValues(string(overallVerdict)).Inc()
 
@@ -290,10 +303,10 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	return nil
 }
 
-func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandbox.RunLimits, map[string]string, []string, error) {
+func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandbox.RunLimits, map[string]string, []string, string, string, error) {
 	set, err := w.pubsub.GetTests(ctx, jobID)
 	if err != nil {
-		return nil, sandbox.RunLimits{}, nil, nil, err
+		return nil, sandbox.RunLimits{}, nil, nil, "", "", err
 	}
 	tests := make([]testData, len(set.Tests))
 	for i, rt := range set.Tests {
@@ -307,7 +320,7 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandb
 			InteractorLanguage: set.InteractorLanguage,
 		}
 	}
-	return tests, set.Limits, set.Files, set.CompilerFlags, nil
+	return tests, set.Limits, set.Files, set.CompilerFlags, set.CallbackURL, set.CallbackSecret, nil
 }
 
 // verdictResults builds the per-test entries of the VERDICT event. The caller
@@ -321,6 +334,7 @@ func verdictResults(results []model.TestResult) []map[string]any {
 			"verdict":        r.Verdict,
 			"cpu_time_ns":    r.CPUTimeNs,
 			"memory_bytes":   r.MemoryBytes,
+			"run_time_ns":    r.RunTimeNs,
 			"stdout_preview": db.Truncate(r.StdoutPreview, 256),
 			"stderr_preview": db.Truncate(r.StderrPreview, 256),
 			"stdout":         r.StdoutPreview,
@@ -442,8 +456,9 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 
 				tr := model.TestResult{
 					TestIndex:     testIndex,
-					CPUTimeNs:     int64(studentRes.Time),   //nolint:gosec // go-judge reports CPU time in ns
-					MemoryBytes:   int64(studentRes.Memory), //nolint:gosec // go-judge reports memory in bytes
+					CPUTimeNs:     int64(studentRes.Time),    //nolint:gosec // go-judge reports CPU time in ns
+					MemoryBytes:   int64(studentRes.Memory),  //nolint:gosec // go-judge reports memory in bytes
+					RunTimeNs:     int64(studentRes.RunTime), //nolint:gosec // go-judge reports wall-clock run time in ns
 					StdoutPreview: studentRes.Files["stdout"],
 					StderrPreview: studentRes.Files["stderr"],
 				}
@@ -537,8 +552,9 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 func judgeResult(r sandbox.Result, testIndex int, expectedOutput, checkerType string) model.TestResult {
 	tr := model.TestResult{
 		TestIndex:     testIndex,
-		CPUTimeNs:     int64(r.Time),   //nolint:gosec // go-judge reports CPU time in ns (non-negative)
-		MemoryBytes:   int64(r.Memory), //nolint:gosec // go-judge reports memory usage in bytes (non-negative)
+		CPUTimeNs:     int64(r.Time),    //nolint:gosec // go-judge reports CPU time in ns (non-negative)
+		MemoryBytes:   int64(r.Memory),  //nolint:gosec // go-judge reports memory usage in bytes (non-negative)
+		RunTimeNs:     int64(r.RunTime), //nolint:gosec // go-judge reports wall-clock run time in ns
 		StdoutPreview: r.Files["stdout"],
 		StderrPreview: r.Files["stderr"],
 	}
