@@ -52,13 +52,16 @@ func NewClient(baseURL, authToken string) *Client {
 func (c *Client) Run(ctx context.Context, req Request) ([]Result, error) {
 	buf := bufPool.Get().(*bytes.Buffer)
 	buf.Reset()
-	defer bufPool.Put(buf)
-
 	if err := json.NewEncoder(buf).Encode(req); err != nil {
+		bufPool.Put(buf)
 		return nil, fmt.Errorf("sandbox: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/run", bytes.NewReader(buf.Bytes()))
+	payload := make([]byte, buf.Len())
+	copy(payload, buf.Bytes())
+	bufPool.Put(buf)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/run", bytes.NewReader(payload))
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: create request: %w", err)
 	}
