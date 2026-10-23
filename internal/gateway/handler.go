@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"net/url"
 	"runtime"
 	"sort"
 	"strings"
@@ -132,6 +133,9 @@ type executeRequest struct {
 	Files map[string]string `json:"files,omitempty"`
 	// Optional whitelisted compiler flags: ["-O3", "-std=c++20"]
 	CompilerFlags []string `json:"compiler_flags,omitempty"`
+	// Optional webhook notification URL and secret for offline or bulk submissions
+	CallbackURL    string `json:"callback_url,omitempty"`
+	CallbackSecret string `json:"callback_secret,omitempty"`
 	// Optional priority tier: "run" (default / interactive), "submit" (contest / assessment), or "bulk" (batch re-judge).
 	Priority string `json:"priority"`
 
@@ -260,6 +264,13 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	if len(req.CompilerFlags) > 0 {
 		if err := sandbox.ValidateCompilerFlags(req.Language, req.CompilerFlags); err != nil {
 			jsonError(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if req.CallbackURL != "" {
+		parsedURL, err := url.ParseRequestURI(req.CallbackURL)
+		if err != nil || (parsedURL.Scheme != "http" && parsedURL.Scheme != "https") {
+			jsonError(w, "invalid callback_url", http.StatusBadRequest)
 			return
 		}
 	}
@@ -398,6 +409,8 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		InteractorLanguage: req.InteractorLanguage,
 		Files:              req.Files,
 		CompilerFlags:      req.CompilerFlags,
+		CallbackURL:        req.CallbackURL,
+		CallbackSecret:     req.CallbackSecret,
 	}
 	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), testSet, queuedEvt, targetStream.StreamName()); err != nil {
 		slog.Error("enqueue failed", "submission_id", jobID, "err", err)
