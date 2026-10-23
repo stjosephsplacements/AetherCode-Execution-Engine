@@ -31,9 +31,8 @@ func (e Event) IsTerminal() bool {
 
 func (e Event) MarshalSSE() []byte {
 	data, _ := json.Marshal(e)
-	// Pre-size the buffer to avoid re-allocations during append.
-	// Prefix overhead: len("id: ") + len("\nevent: ") + len("\ndata: ") + len("\n\n") = 4 + 8 + 7 + 2 = 21 bytes.
-	buf := make([]byte, 0, len(e.ID)+len(e.Type)+len(data)+21)
+	// Using individual appends avoids integer arithmetic flagged by CodeQL go/allocation-size-overflow.
+	var buf []byte
 	buf = append(buf, "id: "...)
 	buf = append(buf, e.ID...)
 	buf = append(buf, "\nevent: "...)
