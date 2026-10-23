@@ -62,6 +62,27 @@ func verifyStreamToken(ctx context.Context, rdb *redis.Client, jobID, token stri
 	return stored == token
 }
 
+// checkOwnership verifies that the caller owns sub. For authenticated callers it
+// checks tenant and user ID; for unauthenticated callers it verifies the stream_token.
+// Writes the appropriate error response and returns false when access is denied.
+func checkOwnership(ctx context.Context, w http.ResponseWriter, rdb *redis.Client, sub *model.Submission, identity auth.Identity, hasAuth bool, jobID, streamToken string) bool {
+	if hasAuth {
+		if sub.TenantID != identity.TenantID || sub.UserID == nil || *sub.UserID != identity.UserID {
+			jsonError(w, "not found", http.StatusNotFound)
+			return false
+		}
+		return true
+	}
+	tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	valid := verifyStreamToken(tokenCtx, rdb, jobID, streamToken)
+	tokenCancel()
+	if !valid {
+		jsonError(w, "invalid or missing stream_token", http.StatusUnauthorized)
+		return false
+	}
+	return true
+}
+
 // Version is set at build time via ldflags.
 var Version = "dev"
 
@@ -592,20 +613,8 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ownership check — same rules as the SSE stream endpoint.
-	if hasAuth {
-		if sub.TenantID != identity.TenantID || sub.UserID == nil || *sub.UserID != identity.UserID {
-			jsonError(w, "not found", http.StatusNotFound)
-			return
-		}
-	} else {
-		tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		valid := verifyStreamToken(tokenCtx, h.rdb, parsedID.String(), r.URL.Query().Get("stream_token"))
-		tokenCancel()
-		if !valid {
-			jsonError(w, "invalid or missing stream_token", http.StatusUnauthorized)
-			return
-		}
+	if !checkOwnership(ctx, w, h.rdb, sub, identity, hasAuth, parsedID.String(), r.URL.Query().Get("stream_token")) {
+		return
 	}
 
 	if err := db.CancelSubmission(ctx, h.pool, parsedID); err != nil {
@@ -672,20 +681,8 @@ func (h *Handler) HandleGetSubmission(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ownership check — same rules as SSE stream and cancellation.
-	if hasAuth {
-		if sub.TenantID != identity.TenantID || sub.UserID == nil || *sub.UserID != identity.UserID {
-			jsonError(w, "not found", http.StatusNotFound)
-			return
-		}
-	} else {
-		tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		valid := verifyStreamToken(tokenCtx, h.rdb, parsedID.String(), r.URL.Query().Get("stream_token"))
-		tokenCancel()
-		if !valid {
-			jsonError(w, "invalid or missing stream_token", http.StatusUnauthorized)
-			return
-		}
+	if !checkOwnership(ctx, w, h.rdb, sub, identity, hasAuth, parsedID.String(), r.URL.Query().Get("stream_token")) {
+		return
 	}
 
 	resp := getSubmissionResponse{
