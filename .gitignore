@@ -1,5 +1,6 @@
 # Binaries (root-level compiled outputs only)
 /stj-exec
+/stj-exec.*
 /aethercode-exec
 /loadgen
 *.out
