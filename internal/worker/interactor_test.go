@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -65,7 +66,7 @@ func TestInteractiveProblems_Workflow(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Prepare interactor
-	it, err := w.prepareInteractor(ctx, "cpp", "#include <iostream> ...", nil)
+	it, err := prepareSandboxProgram(ctx, "interactor", "cpp", "#include <iostream> ...", w.cc, w.judge, slog.Default())
 	if err != nil {
 		t.Fatalf("prepareInteractor: %v", err)
 	}

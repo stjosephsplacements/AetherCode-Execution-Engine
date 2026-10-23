@@ -413,9 +413,9 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 	}
 
 	// If custom checker is requested, prepare it (compile/cache) before running tests.
-	var custom *customChecker
+	var custom *sandboxProgram
 	if len(tests) > 0 && tests[0].CheckerType == "custom" && tests[0].CheckerCode != "" {
-		c, err := w.prepareCustomChecker(ctx, tests[0].CheckerLanguage, tests[0].CheckerCode, log)
+		c, err := prepareSandboxProgram(ctx, "checker", tests[0].CheckerLanguage, tests[0].CheckerCode, w.cc, w.judge, log)
 		if err != nil {
 			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("custom checker setup: %w", err)
 		}
@@ -423,13 +423,13 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 	}
 
 	// If interactive interactor is provided, prepare it before running tests.
-	var it *interactor
+	var it *sandboxProgram
 	if len(tests) > 0 && tests[0].InteractorCode != "" {
-		prepIt, err := w.prepareInteractor(ctx, tests[0].InteractorLanguage, tests[0].InteractorCode, log)
+		sp, err := prepareSandboxProgram(ctx, "interactor", tests[0].InteractorLanguage, tests[0].InteractorCode, w.cc, w.judge, log)
 		if err != nil {
 			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("interactor setup: %w", err)
 		}
-		it = prepIt
+		it = sp
 	}
 
 	for batchStart := 0; batchStart < len(tests); batchStart += maxBatchSize {
