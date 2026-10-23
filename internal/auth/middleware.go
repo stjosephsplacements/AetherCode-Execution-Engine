@@ -47,11 +47,9 @@ func NewMiddleware(issuer, jwksURL, audience string, pool *pgxpool.Pool, appPool
 
 	// Extract host from issuer URL to inject as Host header on internal JWKS requests.
 	// Zitadel requires the correct Host header to route to the right instance.
-	issuerHost := issuer
-	if strings.HasPrefix(issuerHost, "https://") {
-		issuerHost = issuerHost[len("https://"):]
-	} else if strings.HasPrefix(issuerHost, "http://") {
-		issuerHost = issuerHost[len("http://"):]
+	issuerHost, _ := strings.CutPrefix(issuer, "https://")
+	if issuerHost == issuer {
+		issuerHost, _ = strings.CutPrefix(issuer, "http://")
 	}
 
 	client := &http.Client{
