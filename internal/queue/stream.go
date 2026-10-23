@@ -382,11 +382,11 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 					MaxLen: 10_000,
 					Approx: true,
 					Values: map[string]interface{}{
-						"submission_id": subID,
-						"source_stream": stream,
-						"orig_msg_id":   msg.ID,
+						"submission_id":  subID,
+						"source_stream":  stream,
+						"orig_msg_id":    msg.ID,
 						"delivery_count": deliveryCounts[msg.ID],
-						"reclaimed_at":  time.Now().UTC().Format(time.RFC3339),
+						"reclaimed_at":   time.Now().UTC().Format(time.RFC3339),
 					},
 				})
 				dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
