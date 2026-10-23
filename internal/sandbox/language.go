@@ -247,15 +247,34 @@ var Languages = map[string]LangConfig{
 
 // BuildCompileCmd builds the go-judge Cmd for the compilation step.
 func BuildCompileCmd(lang LangConfig, sourceCode string) Cmd {
+	return BuildCompileCmdWithOptions(lang, sourceCode, nil, nil)
+}
+
+// BuildCompileCmdWithOptions builds the go-judge Cmd for compilation supporting extra files and compiler flags.
+func BuildCompileCmdWithOptions(lang LangConfig, sourceCode string, extraFiles map[string]string, compilerFlags []string) Cmd {
+	args := make([]string, 0, len(lang.CompileArgs)+len(compilerFlags))
+	args = append(args, lang.CompileArgs...)
+	if len(compilerFlags) > 0 {
+		args = append(args, compilerFlags...)
+	}
+
+	copyIn := make(map[string]CopyIn, 1+len(extraFiles))
+	copyIn[lang.SourcePath] = FileContent(sourceCode)
+	for fname, content := range extraFiles {
+		// Place extra files relative to /w/
+		targetPath := "/w/" + fname
+		copyIn[targetPath] = FileContent(content)
+	}
+
 	return Cmd{
-		Args:          lang.CompileArgs,
+		Args:          args,
 		Env:           lang.CompileEnv,
 		Files:         []CmdFile{Stdin(""), Collector("stdout", compileOutMax), Collector("stderr", compileOutMax)},
 		CPULimit:      lang.CompileCPU,
 		ClockLimit:    ClockLimit(lang.CompileCPU),
 		MemoryLimit:   lang.CompileMem,
 		ProcLimit:     lang.CompileProc,
-		CopyIn:        map[string]CopyIn{lang.SourcePath: FileContent(sourceCode)},
+		CopyIn:        copyIn,
 		CopyOut:       []string{"stdout", "stderr"},
 		CopyOutCached: []string{lang.BinaryPath},
 	}
@@ -283,6 +302,11 @@ func BuildCacheSourceCmd(lang LangConfig, sourceCode string) Cmd {
 // For interpreted languages with a cached source fileID, pass it to avoid
 // embedding source in every Cmd; pass empty string to inline the source.
 func BuildRunCmd(lang LangConfig, sourceCode, stdinData, fileID string, limits RunLimits) Cmd {
+	return BuildRunCmdWithOptions(lang, sourceCode, stdinData, fileID, limits, nil)
+}
+
+// BuildRunCmdWithOptions builds the go-judge Cmd supporting extra files for interpreted runs.
+func BuildRunCmdWithOptions(lang LangConfig, sourceCode, stdinData, fileID string, limits RunLimits, extraFiles map[string]string) Cmd {
 	cpu, memory := lang.Effective(limits)
 	cmd := Cmd{
 		Args:        lang.RunArgs,
@@ -295,16 +319,25 @@ func BuildRunCmd(lang LangConfig, sourceCode, stdinData, fileID string, limits R
 		CopyOut:     []string{"stdout", "stderr"},
 	}
 
+	copyIn := make(map[string]CopyIn)
 	if fileID != "" {
 		target := lang.BinaryPath
 		if !lang.Compiled {
 			target = lang.SourcePath
 		}
-		cmd.CopyIn = map[string]CopyIn{target: CachedFile(fileID)}
+		copyIn[target] = CachedFile(fileID)
 	} else if lang.StdinIsSource {
 		cmd.Files[0] = Stdin(sourceCode)
 	} else if !lang.Compiled {
-		cmd.CopyIn = map[string]CopyIn{lang.SourcePath: FileContent(sourceCode)}
+		copyIn[lang.SourcePath] = FileContent(sourceCode)
+	}
+
+	for fname, content := range extraFiles {
+		targetPath := "/w/" + fname
+		copyIn[targetPath] = FileContent(content)
+	}
+	if len(copyIn) > 0 {
+		cmd.CopyIn = copyIn
 	}
 
 	return cmd

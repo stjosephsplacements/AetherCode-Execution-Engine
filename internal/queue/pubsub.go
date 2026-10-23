@@ -35,6 +35,16 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"checker_code", set.CheckerCode,
 			"checker_language", set.CheckerLanguage,
 		)
+		if len(set.Files) > 0 {
+			if filesJSON, err := json.Marshal(set.Files); err == nil {
+				fields = append(fields, "files_json", string(filesJSON))
+			}
+		}
+		if len(set.CompilerFlags) > 0 {
+			if flagsJSON, err := json.Marshal(set.CompilerFlags); err == nil {
+				fields = append(fields, "compiler_flags_json", string(flagsJSON))
+			}
+		}
 		for i, t := range set.Tests {
 			prefix := strconv.Itoa(i)
 			fields = append(fields, prefix+":input", t.Input, prefix+":expected", t.ExpectedOutput)
@@ -197,6 +207,15 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 	if v := fields["mem_bytes"]; v != "" {
 		limits.Memory, _ = strconv.ParseUint(v, 10, 64)
 	}
+	var files map[string]string
+	if fj := fields["files_json"]; fj != "" {
+		_ = json.Unmarshal([]byte(fj), &files)
+	}
+	var compilerFlags []string
+	if cfj := fields["compiler_flags_json"]; cfj != "" {
+		_ = json.Unmarshal([]byte(cfj), &compilerFlags)
+	}
+
 	// Absent on jobs enqueued before the checker existed: empty means exact.
 	return TestSet{
 		Tests:           tests,
@@ -204,6 +223,8 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 		Checker:         fields["checker"],
 		CheckerCode:     fields["checker_code"],
 		CheckerLanguage: fields["checker_language"],
+		Files:           files,
+		CompilerFlags:   compilerFlags,
 	}, nil
 }
 
@@ -217,7 +238,9 @@ type TestData struct {
 type TestSet struct {
 	Tests           []TestData
 	Limits          sandbox.RunLimits
-	Checker         string // empty means exact
-	CheckerCode     string // optional custom checker source code
-	CheckerLanguage string // optional custom checker language ("cpp", "python")
+	Checker         string            // empty means exact
+	CheckerCode     string            // optional custom checker source code
+	CheckerLanguage string            // optional custom checker language ("cpp", "python")
+	Files           map[string]string // optional multi-file sources/headers
+	CompilerFlags   []string          // optional whitelisted compiler flags
 }
