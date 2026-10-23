@@ -126,6 +126,22 @@ func BenchmarkNormalizeOutput(b *testing.B) {
 	}
 }
 
+func BenchmarkEqualNormalized_ZeroAlloc(b *testing.B) {
+	var sb strings.Builder
+	for range 50 {
+		sb.WriteString("Hello World 42  \n")
+	}
+	expected := sb.String()
+	actual := sb.String()
+	b.ResetTimer()
+	b.ReportAllocs()
+	for range b.N {
+		if !equalNormalized(expected, actual) {
+			b.Fatal("expected match")
+		}
+	}
+}
+
 func BenchmarkJudgeToken(b *testing.B) {
 	var sb strings.Builder
 	for range 100 {

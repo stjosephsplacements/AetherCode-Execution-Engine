@@ -194,11 +194,11 @@ The `DualConsumer` driver executes weighted fair queuing: it processes configure
 
 The output evaluation subsystem (`internal/worker/judge.go`) provides three grading strategies:
 
-- `exact`: Normalizes line endings (`\r\n` to `\n`) and trims trailing whitespace on every line without intermediate slice allocations.
+- `exact`: Normalizes line endings (`\r\n` to `\n`) and trims trailing whitespace on every line using zero-allocation streaming cursors without allocating intermediate normalized string buffers or slices.
 - `token`: Evaluates tokens delimited by whitespace using cursor offset indices, comparing tokens directly from input buffers.
 - `float`: Scans numeric tokens without allocating string arrays, parsing tokens via `strconv.ParseFloat` and validating differences against an absolute epsilon of `1e-6`.
 
-Microbenchmarks demonstrate sustained 0 B/op and 0 allocs/op during continuous evaluation cycles.
+Microbenchmarks demonstrate sustained 0 B/op and 0 allocs/op across `exact`, `token`, and `float` comparison passes during continuous evaluation cycles.
 
 ---
 
