@@ -125,3 +125,29 @@ func BenchmarkNormalizeOutput(b *testing.B) {
 		normalizeOutput(s)
 	}
 }
+
+func BenchmarkJudgeToken(b *testing.B) {
+	var sb strings.Builder
+	for range 100 {
+		sb.WriteString("12345 67890 hello world 3.14159\n")
+	}
+	expected := sb.String()
+	actual := sb.String()
+	b.ResetTimer()
+	for range b.N {
+		JudgeOutput("token", expected, actual)
+	}
+}
+
+func BenchmarkJudgeFloat(b *testing.B) {
+	var sb strings.Builder
+	for range 100 {
+		sb.WriteString("3.14159265 2.71828182 1.41421356 1.7320508\n")
+	}
+	expected := sb.String()
+	actual := sb.String()
+	b.ResetTimer()
+	for range b.N {
+		JudgeOutput("float", expected, actual)
+	}
+}

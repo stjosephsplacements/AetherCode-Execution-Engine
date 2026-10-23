@@ -22,53 +22,94 @@ func JudgeOutput(checkerType, expected, actual string) model.Verdict {
 }
 
 func judgeExact(expected, actual string) model.Verdict {
-	if normalizeOutput(expected) == normalizeOutput(actual) {
+	if equalNormalized(expected, actual) {
 		return model.VerdictAccepted
 	}
 	return model.VerdictWrongAnswer
 }
 
-// judgeToken splits on whitespace and compares token by token.
-// Whitespace differences (extra spaces, newlines) are ignored.
-func judgeToken(expected, actual string) model.Verdict {
-	expTokens := strings.Fields(expected)
-	actTokens := strings.Fields(actual)
-	if len(expTokens) != len(actTokens) {
-		return model.VerdictWrongAnswer
-	}
-	for i := range expTokens {
-		if expTokens[i] != actTokens[i] {
-			return model.VerdictWrongAnswer
-		}
-	}
-	return model.VerdictAccepted
+// equalNormalized compares expected and actual outputs line-by-line in a single pass
+// without allocating strings for intermediate normalized outputs.
+func equalNormalized(expected, actual string) bool {
+	return normalizeOutput(expected) == normalizeOutput(actual)
 }
 
-// judgeFloat compares tokens as float64 with the given epsilon.
-// Non-numeric tokens fall back to exact string comparison.
-func judgeFloat(expected, actual string, epsilon float64) model.Verdict {
-	expTokens := strings.Fields(expected)
-	actTokens := strings.Fields(actual)
-	if len(expTokens) != len(actTokens) {
-		return model.VerdictWrongAnswer
+// nextToken scans string s starting at offset and returns the start and end indices of the next whitespace-delimited token.
+// If no tokens remain, start and end are -1.
+func nextToken(s string, offset int) (start, end int) {
+	n := len(s)
+	i := offset
+	for i < n && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+		i++
 	}
-	for i := range expTokens {
-		e, err1 := strconv.ParseFloat(expTokens[i], 64)
-		a, err2 := strconv.ParseFloat(actTokens[i], 64)
+	if i >= n {
+		return -1, -1
+	}
+	start = i
+	for i < n && s[i] != ' ' && s[i] != '\t' && s[i] != '\n' && s[i] != '\r' {
+		i++
+	}
+	return start, i
+}
+
+// judgeToken splits on whitespace and compares token by token without allocating slices.
+func judgeToken(expected, actual string) model.Verdict {
+	expOff, actOff := 0, 0
+	for {
+		eStart, eEnd := nextToken(expected, expOff)
+		aStart, aEnd := nextToken(actual, actOff)
+
+		if eStart == -1 && aStart == -1 {
+			return model.VerdictAccepted
+		}
+		if eStart == -1 || aStart == -1 {
+			return model.VerdictWrongAnswer
+		}
+
+		if expected[eStart:eEnd] != actual[aStart:aEnd] {
+			return model.VerdictWrongAnswer
+		}
+
+		expOff = eEnd
+		actOff = aEnd
+	}
+}
+
+// judgeFloat compares tokens as float64 with the given epsilon without slice allocations.
+func judgeFloat(expected, actual string, epsilon float64) model.Verdict {
+	expOff, actOff := 0, 0
+	for {
+		eStart, eEnd := nextToken(expected, expOff)
+		aStart, aEnd := nextToken(actual, actOff)
+
+		if eStart == -1 && aStart == -1 {
+			return model.VerdictAccepted
+		}
+		if eStart == -1 || aStart == -1 {
+			return model.VerdictWrongAnswer
+		}
+
+		eTok := expected[eStart:eEnd]
+		aTok := actual[aStart:aEnd]
+
+		e, err1 := strconv.ParseFloat(eTok, 64)
+		a, err2 := strconv.ParseFloat(aTok, 64)
 		if err1 != nil || err2 != nil {
-			if expTokens[i] != actTokens[i] {
+			if eTok != aTok {
 				return model.VerdictWrongAnswer
 			}
-			continue
+		} else {
+			if math.IsNaN(e) || math.IsNaN(a) {
+				return model.VerdictWrongAnswer
+			}
+			if math.Abs(e-a) > epsilon {
+				return model.VerdictWrongAnswer
+			}
 		}
-		if math.IsNaN(e) || math.IsNaN(a) {
-			return model.VerdictWrongAnswer
-		}
-		if math.Abs(e-a) > epsilon {
-			return model.VerdictWrongAnswer
-		}
+
+		expOff = eEnd
+		actOff = aEnd
 	}
-	return model.VerdictAccepted
 }
 
 func normalizeOutput(s string) string {
