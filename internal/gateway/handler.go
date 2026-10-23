@@ -583,6 +583,18 @@ func (h *Handler) HandleCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.pubsub != nil {
+		verdictData := map[string]any{
+			"verdict": model.VerdictCancelled,
+		}
+		pubCtx, pubCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+		if err := h.pubsub.PublishEvent(pubCtx, eventlog.New(parsedID.String(), eventlog.EventVerdict, verdictData)); err != nil {
+			slog.Warn("failed to publish VERDICT event for cancelled submission", "submission_id", parsedID, "err", err)
+		}
+		pubCancel()
+	}
+	metrics.JobsProcessedTotal.WithLabelValues(string(model.VerdictCancelled)).Inc()
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(map[string]bool{"cancelled": true}) //nolint:errcheck

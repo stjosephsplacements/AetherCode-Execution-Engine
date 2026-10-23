@@ -12,9 +12,13 @@ import (
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/db"
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/eventlog"
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/model"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/queue"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
@@ -309,6 +313,58 @@ func TestHandleCancel_InvalidID(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Errorf("expected 400, got %d", rec.Code)
+	}
+}
+
+func TestHandleCancel_EmitsVerdictEvent(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	pool := newFakePGPool(t)
+	ps := queue.NewPubSub(rdb)
+
+	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
+	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
+	h := NewHandler(pool, submitStream, runStream, ps, nil, rdb, nil, nil, 5000, 8)
+
+	ctx := context.Background()
+	jobID := uuid.New()
+	if err := db.InsertSubmission(ctx, pool, &model.Submission{
+		ID:         jobID,
+		TenantID:   model.DefaultTenantID,
+		Language:   "python",
+		SourceCode: "print(1)",
+		Status:     model.StatusQueued,
+		TestCount:  3,
+	}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+
+	token, err := newStreamToken(ctx, rdb, jobID.String())
+	if err != nil {
+		t.Fatalf("token: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/submissions/"+jobID.String()+"?stream_token="+token, nil)
+	req.SetPathValue("id", jobID.String())
+	h.HandleCancel(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	events, err := ps.GetEventLog(ctx, jobID.String())
+	if err != nil {
+		t.Fatalf("get event log: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != eventlog.EventVerdict {
+		t.Errorf("event type = %v, want VERDICT", events[0].Type)
+	}
+	data, ok := events[0].Data.(map[string]any)
+	if !ok || data["verdict"] != string(model.VerdictCancelled) {
+		t.Errorf("verdict = %v, want cancelled", data["verdict"])
 	}
 }
 
