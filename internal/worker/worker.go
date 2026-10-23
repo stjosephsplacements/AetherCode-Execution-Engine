@@ -104,6 +104,19 @@ type testData struct {
 	InteractorLanguage string
 }
 
+type jobSpec struct {
+	tests          []testData
+	limits         sandbox.RunLimits
+	files          map[string]string
+	compilerFlags  []string
+	callbackURL    string
+	callbackSecret string
+}
+
+func isAlreadyTerminal(err error) bool {
+	return strings.Contains(err.Error(), "already terminal")
+}
+
 func (w *Worker) process(ctx context.Context, submissionID string) error {
 	start := time.Now()
 
@@ -129,7 +142,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 
 	// Claim the submission early so orphan reaper won't re-enqueue it.
 	if err := db.UpdateSubmissionStatus(jobCtx, w.pool, id, model.StatusRunning); err != nil {
-		if strings.Contains(err.Error(), "already terminal") {
+		if isAlreadyTerminal(err) {
 			log.Info("submission became terminal before claim", "submission_id", submissionID)
 			return nil
 		}
@@ -163,11 +176,11 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	}()
 
 	// Load the job's tests and limits from Redis
-	tests, limits, extraFiles, compilerFlags, callbackURL, callbackSecret, err := w.loadTests(jobCtx, submissionID)
+	spec, err := w.loadTests(jobCtx, submissionID)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("load tests: %v", err), log)
 	}
-	if len(tests) == 0 {
+	if len(spec.tests) == 0 {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, "no tests found", log)
 	}
 
@@ -179,7 +192,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	// With batched execution the wall-clock budget is the slowest single test
 	// (they run in parallel), not the sum. Keep the serial budget as a safe upper
 	// bound so the context doesn't expire prematurely on large test sets.
-	if budget := jobBudget(lang, limits, len(tests)); budget > w.jobTimeout {
+	if budget := jobBudget(lang, spec.limits, len(spec.tests)); budget > w.jobTimeout {
 		extendedCtx, extendedCancel := context.WithTimeout(ctx, budget)
 		defer extendedCancel()
 		jobCtx = extendedCtx
@@ -189,7 +202,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	var fileID string
 	if lang.Compiled {
 		if err := db.UpdateSubmissionStatus(jobCtx, w.pool, id, model.StatusCompiling); err != nil {
-			if strings.Contains(err.Error(), "already terminal") {
+			if isAlreadyTerminal(err) {
 				log.Info("submission became terminal before compile")
 				return nil
 			}
@@ -199,14 +212,14 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 			log.Warn("failed to publish COMPILING event", "err", err)
 		}
 
-		cacheKey := compileCacheKeyWithOptions(sub.Language, sub.SourceCode, extraFiles, compilerFlags)
+		cacheKey := compileCacheKeyWithOptions(sub.Language, sub.SourceCode, spec.files, spec.compilerFlags)
 		if cached, hit := w.cc.get(cacheKey); hit {
 			fileID = cached
 			metrics.CompileCacheHitsTotal.Inc()
 			log.Info("compile cache hit", "fileId", fileID)
 		} else {
 			compileStart := time.Now()
-			compileResult, err := w.compileWithOptions(jobCtx, lang, sub.SourceCode, extraFiles, compilerFlags)
+			compileResult, err := w.compileWithOptions(jobCtx, lang, sub.SourceCode, spec.files, spec.compilerFlags)
 			metrics.CompileDuration.WithLabelValues(sub.Language).Observe(time.Since(compileStart).Seconds())
 			if err != nil {
 				return w.failSubmission(jobCtx, id, model.VerdictInternalError, err.Error(), log)
@@ -235,7 +248,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	// (interpreted languages are already in StatusRunning from the claim step).
 	if lang.Compiled {
 		if err := db.UpdateSubmissionStatus(jobCtx, w.pool, id, model.StatusRunning); err != nil {
-			if strings.Contains(err.Error(), "already terminal") {
+			if isAlreadyTerminal(err) {
 				log.Info("submission became terminal before test run")
 				return nil
 			}
@@ -246,7 +259,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		log.Warn("failed to publish RUNNING event", "err", err)
 	}
 
-	results, totalCPU, peakMem, passed, overallVerdict, err := w.runTestsBatched(jobCtx, submissionID, lang, sub.SourceCode, tests, fileID, limits, extraFiles, log)
+	results, totalCPU, peakMem, passed, overallVerdict, err := w.runTestsBatched(jobCtx, submissionID, lang, sub.SourceCode, spec.tests, fileID, spec.limits, spec.files, log)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("batch run: %v", err), log)
 	}
@@ -258,7 +271,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 
 	if err := db.InsertResultsAndVerdict(writeCtx, w.pool, id, results,
 		model.StatusCompleted, overallVerdict, "",
-		totalCPU, peakMem, len(tests), passed); err != nil {
+		totalCPU, peakMem, len(spec.tests), passed); err != nil {
 		if strings.Contains(err.Error(), "verdict already written") {
 			log.Warn("duplicate execution detected, verdict already persisted")
 			return nil
@@ -268,11 +281,11 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 
 	eventResults := verdictResults(results)
 
-	effectiveCPU, effectiveMem := lang.Effective(limits)
+	effectiveCPU, effectiveMem := lang.Effective(spec.limits)
 	verdictData := map[string]any{
 		"verdict":                    overallVerdict,
 		"tests_passed":               passed,
-		"test_count":                 len(tests),
+		"test_count":                 len(spec.tests),
 		"cpu_time_ns":                totalCPU,
 		"memory_bytes":               peakMem,
 		"applied_cpu_limit_ns":       effectiveCPU,
@@ -283,12 +296,12 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		log.Error("failed to publish VERDICT event (DB has verdict, SSE client may not)", "err", err)
 	}
 
-	if callbackURL != "" {
-		go dispatchWebhook(context.WithoutCancel(ctx), callbackURL, callbackSecret, WebhookPayload{
+	if spec.callbackURL != "" {
+		go dispatchWebhook(context.WithoutCancel(ctx), spec.callbackURL, spec.callbackSecret, WebhookPayload{
 			SubmissionID: submissionID,
 			Verdict:      string(overallVerdict),
 			TestsPassed:  passed,
-			TestCount:    len(tests),
+			TestCount:    len(spec.tests),
 			CPUTimeNs:    totalCPU,
 			MemoryBytes:  peakMem,
 			Timestamp:    time.Now().UTC(),
@@ -299,14 +312,14 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	finalVerdict = string(overallVerdict)
 	metrics.JobsProcessedTotal.WithLabelValues(string(overallVerdict)).Inc()
 
-	log.Info("completed", "verdict", overallVerdict, "passed", passed, "total", len(tests))
+	log.Info("completed", "verdict", overallVerdict, "passed", passed, "total", len(spec.tests))
 	return nil
 }
 
-func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandbox.RunLimits, map[string]string, []string, string, string, error) {
+func (w *Worker) loadTests(ctx context.Context, jobID string) (jobSpec, error) {
 	set, err := w.pubsub.GetTests(ctx, jobID)
 	if err != nil {
-		return nil, sandbox.RunLimits{}, nil, nil, "", "", err
+		return jobSpec{}, err
 	}
 	tests := make([]testData, len(set.Tests))
 	for i, rt := range set.Tests {
@@ -320,7 +333,14 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandb
 			InteractorLanguage: set.InteractorLanguage,
 		}
 	}
-	return tests, set.Limits, set.Files, set.CompilerFlags, set.CallbackURL, set.CallbackSecret, nil
+	return jobSpec{
+		tests:          tests,
+		limits:         set.Limits,
+		files:          set.Files,
+		compilerFlags:  set.CompilerFlags,
+		callbackURL:    set.CallbackURL,
+		callbackSecret: set.CallbackSecret,
+	}, nil
 }
 
 // verdictResults builds the per-test entries of the VERDICT event. The caller
