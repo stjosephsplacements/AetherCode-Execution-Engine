@@ -42,7 +42,9 @@ type Config struct {
 	// Fair queuing
 	SubmitStreamName string
 	RunStreamName    string
+	BulkStreamName   string
 	SubmitWeight     int
+	BulkWeight       int
 
 	// Timeouts
 	JobTimeout time.Duration
@@ -92,7 +94,9 @@ func Load() Config {
 
 		SubmitStreamName: env("AC_SUBMIT_STREAM", "ac:submissions:submit"),
 		RunStreamName:    env("AC_RUN_STREAM", "ac:submissions:run"),
+		BulkStreamName:   env("AC_BULK_STREAM", "ac:submissions:bulk"),
 		SubmitWeight:     envInt("AC_SUBMIT_WEIGHT", 3),
+		BulkWeight:       envInt("AC_BULK_WEIGHT", 1),
 
 		JobTimeout: envDuration("AC_JOB_TIMEOUT", 90*time.Second),
 
@@ -118,6 +122,7 @@ func (c Config) Validate() error {
 
 	check(c.WorkerCount > 0 && c.WorkerCount <= 512, "WorkerCount must be 1-512")
 	check(c.SubmitWeight > 0, "SubmitWeight must be > 0")
+	check(c.BulkWeight > 0, "BulkWeight must be > 0")
 	check(c.AdmissionMaxQueueDepth > 0, "AdmissionMaxQueueDepth must be > 0")
 	check(c.RateLimitPerMinute > 0, "RateLimitPerMinute must be > 0")
 	check(c.RateLimitBurst > 0, "RateLimitBurst must be > 0")
