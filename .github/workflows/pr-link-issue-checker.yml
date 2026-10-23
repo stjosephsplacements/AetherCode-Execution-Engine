@@ -1,0 +1,77 @@
+name: pr-link-issue-checker
+
+# Verifies that every pull request fixes or links to an open issue.
+# Contributors are required to reference an issue (e.g., "Fixes #123", "Closes #45", "Resolves #67")
+# so that all code additions map directly to tracked tasks.
+#
+# Maintainers and automated release/sync/dependabot PRs are exempt.
+
+on:
+  pull_request_target:
+    branches: [development]
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  check-linked-issue:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check for linked issue
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          PR="${{ github.event.pull_request.number }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+          TITLE="${{ github.event.pull_request.title }}"
+          BODY="${{ github.event.pull_request.body }}"
+
+          # Exempt bots
+          case "${AUTHOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*|coderabbitai\[bot\])
+              echo "Bot ${AUTHOR} — exempted."
+              exit 0
+              ;;
+          esac
+
+          # Exempt maintainers
+          PERM=$(gh api "repos/${REPO}/collaborators/${AUTHOR}/permission" --jq '.permission' 2>/dev/null || echo "none")
+          if [[ "$PERM" == "admin" || "$PERM" == "write" || "$PERM" == "maintain" ]]; then
+            echo "Maintainer ${AUTHOR} ('${PERM}') — exempted."
+            exit 0
+          fi
+
+          # Exempt docs, chore, and sync branches
+          if echo "${TITLE}" | grep -qE '^(chore|docs|sync|ci)\b'; then
+            echo "PR type is chore/docs/sync/ci — exempted from linked issue."
+            exit 0
+          fi
+
+          # Search for issue reference patterns (Fixes #123, Closes #123, Resolves #123, Refs #123, #123)
+          COMBINED="${TITLE} ${BODY}"
+          if echo "$COMBINED" | grep -qiE '(close[sd]?|fix(e[sd])?|resolve[sd]?|refs?|issue)[\s:]+#([0-9]+)'; then
+            echo "Valid linked issue detected. ✅"
+            exit 0
+          fi
+
+          # Post guidance comment
+          gh pr comment "$PR" --repo "$REPO" --body "$(cat <<EOF
+## ⚠️ No linked issue detected
+
+Hi @${AUTHOR}! Every pull request implementing new features or bug fixes should be linked to an existing tracked issue.
+
+**How to fix:**
+Please edit your PR description (pencil icon at top right) and include an issue reference keyword, for example:
+- \`Fixes #<issue-number>\`
+- \`Closes #<issue-number>\`
+- \`Resolves #<issue-number>\`
+
+If there isn't an issue for this work yet, please [open a new issue first](https://github.com/${REPO}/issues/new/choose) and link it here.
+EOF
+)"
+          echo "::warning::PR #${PR} is missing a linked issue."
+          exit 0

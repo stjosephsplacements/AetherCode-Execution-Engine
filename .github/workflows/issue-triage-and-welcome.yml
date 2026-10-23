@@ -1,0 +1,72 @@
+name: issue-triage-and-welcome
+
+# Greets new issue creators, auto-labels based on keywords,
+# and verifies essential information is provided in the issue description.
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Auto-triage and greet issue author
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          ISSUE="${{ github.event.issue.number }}"
+          AUTHOR="${{ github.event.issue.user.login }}"
+          TITLE="${{ github.event.issue.title }}"
+          BODY="${{ github.event.issue.body }}"
+
+          # Skip bots
+          case "${AUTHOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*|coderabbitai\[bot\])
+              exit 0
+              ;;
+          esac
+
+          # Auto-label based on keywords in title and body
+          LOWER_CONTENT="$(echo "${TITLE} ${BODY}" | tr '[:upper:]' '[:lower:]')"
+
+          LABELS_TO_ADD=""
+          if echo "$LOWER_CONTENT" | grep -qE '(bug|crash|panic|broken|error|fails|exception)'; then
+            LABELS_TO_ADD="${LABELS_TO_ADD} bug"
+          fi
+          if echo "$LOWER_CONTENT" | grep -qE '(perf|performance|latency|p95|p99|alloc|speed|slow)'; then
+            LABELS_TO_ADD="${LABELS_TO_ADD} performance"
+          fi
+          if echo "$LOWER_CONTENT" | grep -qE '(feature|enhancement|support for|add|request)'; then
+            LABELS_TO_ADD="${LABELS_TO_ADD} enhancement"
+          fi
+          if echo "$LOWER_CONTENT" | grep -qE '(docs|documentation|readme|agents.md|claude.md)'; then
+            LABELS_TO_ADD="${LABELS_TO_ADD} documentation"
+          fi
+          if echo "$LOWER_CONTENT" | grep -qE '(security|vulnerability|cve|injection|overflow)'; then
+            LABELS_TO_ADD="${LABELS_TO_ADD} security"
+          fi
+
+          for lbl in $LABELS_TO_ADD; do
+            gh label create "$lbl" --repo "$REPO" 2>/dev/null || true
+            gh issue edit "$ISSUE" --repo "$REPO" --add-label "$lbl" 2>/dev/null || true
+          done
+
+          # Post friendly guidance comment
+          gh issue comment "$ISSUE" --repo "$REPO" --body "$(cat <<EOF
+Thank you for opening this issue, @${AUTHOR}! 🤝
+
+Our automated issue bot has received this report.
+
+### 📌 Useful Tips:
+- If you intend to work on this issue yourself, simply comment \`/assign\` to claim it on an **FCFS basis**.
+- Ensure you have provided reproducible steps, logs, or context to help maintainers investigate.
+- Please refer to [**CONTRIBUTING.md**](https://github.com/${REPO}/blob/development/CONTRIBUTING.md) and [**AGENTS.md**](https://github.com/${REPO}/blob/development/AGENTS.md) for coding and architecture guidelines.
+EOF
+)"

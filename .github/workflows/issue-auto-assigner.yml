@@ -1,0 +1,82 @@
+name: issue-auto-assigner
+
+# Auto-assigns issues on a First-Come, First-Served (FCFS) basis.
+# Contributors can comment "/assign", "I would like to work on this", "can I take this", etc.
+# Also allows "/unassign" if they can no longer work on it.
+# Limits non-maintainers to at most 1 active assigned issue at a time.
+
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  assign:
+    # Only run on open issues (not PRs)
+    if: ${{ !github.event.issue.pull_request && github.event.issue.state == 'open' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Process Issue Assignment
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          ISSUE="${{ github.event.issue.number }}"
+          COMMENTOR="${{ github.event.comment.user.login }}"
+          COMMENT_BODY="$(echo "${{ github.event.comment.body }}" | tr '[:upper:]' '[:lower:]')"
+
+          # Ignore bot comments
+          case "${COMMENTOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*|coderabbitai\[bot\])
+              exit 0
+              ;;
+          esac
+
+          # Check for /unassign command
+          if echo "$COMMENT_BODY" | grep -qE '^/unassign\b'; then
+            # Verify if user is currently assigned
+            CURRENT_ASSIGNEES=$(gh api "repos/${REPO}/issues/${ISSUE}" --jq '[.assignees[].login] | join(" ")')
+            if echo "$CURRENT_ASSIGNEES" | grep -qw "$COMMENTOR"; then
+              gh api -X DELETE "repos/${REPO}/issues/${ISSUE}/assignees" -f "assignees[]=${COMMENTOR}"
+              gh issue comment "$ISSUE" --repo "$REPO" --body "Unassigned @${COMMENTOR} from this issue. It is now open for others to claim."
+              exit 0
+            else
+              gh issue comment "$ISSUE" --repo "$REPO" --body "@${COMMENTOR}: You are not currently assigned to this issue."
+              exit 0
+            fi
+          fi
+
+          # Check for /assign command or intent to claim
+          IS_ASSIGN_REQUEST=false
+          if echo "$COMMENT_BODY" | grep -qE '(^/assign\b|can i work on this|i want to work on this|please assign this to me|can i take this|i would like to work on this)'; then
+            IS_ASSIGN_REQUEST=true
+          fi
+
+          if [ "$IS_ASSIGN_REQUEST" = false ]; then
+            exit 0
+          fi
+
+          # Check if issue is already assigned
+          ASSIGNEES=$(gh api "repos/${REPO}/issues/${ISSUE}" --jq '[.assignees[].login] | join(", ")')
+          if [ -n "$ASSIGNEES" ]; then
+            gh issue comment "$ISSUE" --repo "$REPO" --body "Hi @${COMMENTOR}! This issue is already assigned to **${ASSIGNEES}** on an FCFS basis. Please check other unassigned issues labeled \`good first issue\` or \`help wanted\`."
+            exit 0
+          fi
+
+          # Check if user already has an assigned open issue (maintainers exempt)
+          PERM=$(gh api "repos/${REPO}/collaborators/${COMMENTOR}/permission" --jq '.permission' 2>/dev/null || echo "none")
+          if [[ "$PERM" != "admin" && "$PERM" != "write" && "$PERM" != "maintain" ]]; then
+            OPEN_ASSIGNED=$(gh issue list --repo "$REPO" --state open --assignee "$COMMENTOR" --json number --jq 'length')
+            if [ "${OPEN_ASSIGNED:-0}" -ge 1 ]; then
+              gh issue comment "$ISSUE" --repo "$REPO" --body "Hi @${COMMENTOR}! You already have an open assigned issue in progress. To ensure fair opportunities for everyone, contributors may only claim **one issue at a time**. Please finish or unassign yourself from your active issue before claiming a new one."
+              exit 0
+            fi
+          fi
+
+          # Assign the user
+          gh api -X POST "repos/${REPO}/issues/${ISSUE}/assignees" -f "assignees[]=${COMMENTOR}"
+          gh issue comment "$ISSUE" --repo "$REPO" --body "Issue assigned to @${COMMENTOR} (FCFS)! 🎉\n\nPlease submit a PR when ready and reference this issue in your PR description (e.g. \`Fixes #${ISSUE}\`). If you need to drop this issue, comment \`/unassign\` so someone else can pick it up."
