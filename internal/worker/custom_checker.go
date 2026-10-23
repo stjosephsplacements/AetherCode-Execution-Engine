@@ -55,10 +55,7 @@ func (w *Worker) prepareCustomChecker(ctx context.Context, checkerLang, checkerC
 			}
 			return nil, fmt.Errorf("checker compilation failed: %s", stderr)
 		}
-		for _, fid := range results[0].FileIDs {
-			cc.fileID = fid
-			break
-		}
+		cc.fileID = firstFileID(results[0].FileIDs)
 		if cc.fileID != "" {
 			w.cc.put(cacheKey, cc.fileID)
 		}
@@ -66,10 +63,7 @@ func (w *Worker) prepareCustomChecker(ctx context.Context, checkerLang, checkerC
 		cacheCmd := sandbox.BuildCacheSourceCmd(langCfg, checkerCode)
 		results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
 		if err == nil && len(results) == 1 && results[0].Status == sandbox.StatusAccepted {
-			for _, fid := range results[0].FileIDs {
-				cc.fileID = fid
-				break
-			}
+			cc.fileID = firstFileID(results[0].FileIDs)
 			if cc.fileID != "" {
 				w.cc.put(cacheKey, cc.fileID)
 			}

@@ -82,6 +82,16 @@ func (c *compileCache) put(key, fileID string) {
 	c.m[key] = cacheEntry{fileID: fileID, created: time.Now()}
 }
 
+// firstFileID returns the first value from a string map, or "" if the map is empty.
+// go-judge returns exactly one file ID per cached output; this extracts it without
+// relying on map iteration order being deterministic (it is not, but there is only one entry).
+func firstFileID(m map[string]string) string {
+	for _, id := range m {
+		return id
+	}
+	return ""
+}
+
 func (c *compileCache) evictExpired() {
 	c.mu.Lock()
 	defer c.mu.Unlock()

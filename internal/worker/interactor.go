@@ -52,10 +52,7 @@ func (w *Worker) prepareInteractor(ctx context.Context, interactorLang, interact
 			}
 			return nil, fmt.Errorf("interactor compilation failed: %s", stderr)
 		}
-		for _, fid := range results[0].FileIDs {
-			it.fileID = fid
-			break
-		}
+		it.fileID = firstFileID(results[0].FileIDs)
 		if it.fileID != "" {
 			w.cc.put(cacheKey, it.fileID)
 		}
@@ -63,10 +60,7 @@ func (w *Worker) prepareInteractor(ctx context.Context, interactorLang, interact
 		cacheCmd := sandbox.BuildCacheSourceCmd(langCfg, interactorCode)
 		results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
 		if err == nil && len(results) == 1 && results[0].Status == sandbox.StatusAccepted {
-			for _, fid := range results[0].FileIDs {
-				it.fileID = fid
-				break
-			}
+			it.fileID = firstFileID(results[0].FileIDs)
 			if it.fileID != "" {
 				w.cc.put(cacheKey, it.fileID)
 			}

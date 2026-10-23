@@ -231,10 +231,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 				return w.failSubmission(jobCtx, id, model.VerdictCompilationError, stderr, log)
 			}
 
-			for _, fid := range compileResult.FileIDs {
-				fileID = fid
-				break
-			}
+			fileID = firstFileID(compileResult.FileIDs)
 			if fileID == "" {
 				return w.failSubmission(jobCtx, id, model.VerdictInternalError, "no cached file returned from compile", log)
 			}
@@ -407,10 +404,7 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 		cacheCmd := sandbox.BuildCacheSourceCmd(lang, sourceCode)
 		cacheResults, cacheErr := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
 		if cacheErr == nil && len(cacheResults) == 1 && cacheResults[0].Status == sandbox.StatusAccepted {
-			for _, fid := range cacheResults[0].FileIDs {
-				fileID = fid
-				break
-			}
+			fileID = firstFileID(cacheResults[0].FileIDs)
 			if fileID != "" {
 				log.Debug("cached interpreted source", "fileId", fileID)
 			}

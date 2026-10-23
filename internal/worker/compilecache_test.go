@@ -133,6 +133,22 @@ func BenchmarkCompileCacheEvict_1000Entries(b *testing.B) {
 	}
 }
 
+func TestFirstFileID(t *testing.T) {
+	cases := []struct {
+		m    map[string]string
+		want string
+	}{
+		{nil, ""},
+		{map[string]string{}, ""},
+		{map[string]string{"/w/a.out": "abc123"}, "abc123"},
+	}
+	for _, tc := range cases {
+		if got := firstFileID(tc.m); got != tc.want {
+			t.Errorf("firstFileID(%v) = %q; want %q", tc.m, got, tc.want)
+		}
+	}
+}
+
 func BenchmarkCompileCacheKey(b *testing.B) {
 	largeSourceBytes := make([]byte, 64*1024)
 	for i := range largeSourceBytes {
