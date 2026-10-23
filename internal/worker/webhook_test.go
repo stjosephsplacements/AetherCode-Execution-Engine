@@ -155,7 +155,10 @@ func TestWebhookClientBlocksRedirects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("build request: %v", err)
 	}
-	_, err = client.Do(req)
+	resp, err := client.Do(req)
+	if resp != nil {
+		resp.Body.Close()
+	}
 	if err == nil {
 		t.Fatal("expected redirect to be blocked, got nil error")
 	}

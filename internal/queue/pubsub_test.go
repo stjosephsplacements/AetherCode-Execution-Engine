@@ -445,7 +445,7 @@ func TestCallbackSecret_BackwardsCompatibility(t *testing.T) {
 	ps := NewPubSubWithKey(rdb, masterKey)
 
 	// Simulate a pre-encryption Redis record (no enc: prefix).
-	plaintextSecret := "old-plaintext-secret"
+	plaintextSecret := "old-plaintext-secret" //nolint:gosec // G101: test fixture, not a real credential
 	if err := rdb.HSet(ctx, "ac:tests:job-legacy",
 		"count", 1,
 		"0:input", "x", "0:expected", "y",
