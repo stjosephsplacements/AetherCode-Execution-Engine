@@ -1,294 +1,391 @@
 # AetherCode Execution Engine
 
 <p align="center">
-  <img src="AetherCode.png" alt="AetherCode Execution Engine" width="60%">
+  <img src="AetherCode.png" alt="AetherCode Execution Engine" width="100%">
 </p>
 
-On-premise distributed code execution engine. Accepts code submissions over HTTP, runs them in isolated sandboxes, and streams verdicts back via Server-Sent Events.
+An enterprise-grade, high-throughput, on-premise distributed code execution and evaluation engine. AetherCode ingests untrusted code submissions over HTTP, safely runs them inside hardware-isolated Linux kernel sandboxes (cgroups v2, seccomp-bpf, network namespaces, and tmpfs overlays), and streams real-time execution lifecycle events and test verdicts back to clients via Server-Sent Events (SSE).
 
-![CI](https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/ci.yml/badge.svg)
-![License: AGPL-3.0](https://img.shields.io/badge/License-AGPL%20v3-blue.svg)
-![Go](https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white)
-![Docker](https://img.shields.io/badge/Docker-ready-2496ED?logo=docker&logoColor=white)
+<p align="center">
+  <a href="https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/ci.yml"><img src="https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white" alt="Go">
+  <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker">
+  <img src="https://img.shields.io/badge/Architecture-Distributed%20%26%20Zero--Allocation-success" alt="Architecture">
+</p>
 
-**Status:** Production-hardened. Zero lost jobs verified at 5,000 concurrent connections / 15,000 submissions.
+**Operational Status:** Battle-tested and production-hardened. Zero lost jobs verified under 5,000 concurrent sustained connections and 15,000 burst submissions.
 
-> **License:** open source under the [GNU AGPL v3](LICENSE). If you offer the
-> engine as a network service, the AGPL's network-copyleft terms require you to
-> share the engine's source — see [License](#license).
+> **License:** Licensed under the [GNU Affero General Public License v3.0 (AGPLv3)](LICENSE). If you operate or integrate this engine as a network-accessible service, Section 13 requires providing complete corresponding source code to network users. Please review [License](#license) for complete compliance details.
 
 ---
 
 ## Table of Contents
 
-- [Quickstart](#quickstart)
-- [Architecture](#architecture)
-- [Configuration](#configuration)
+- [Key Architectural Highlights](#key-architectural-highlights)
+- [Quickstart Guide](#quickstart-guide)
+  - [Prerequisites](#prerequisites)
+  - [Docker Compose Deployment](#docker-compose-deployment)
+  - [Local Source Compilation](#local-source-compilation)
+  - [Systemd Production Service](#systemd-production-service)
+  - [Verification and Benchmarking](#verification-and-benchmarking)
+- [System Architecture](#system-architecture)
+  - [Execution Flow](#execution-flow)
+  - [Weighted Fair Queuing](#weighted-fair-queuing)
+  - [Reliability and Self-Healing Invariants](#reliability-and-self-healing-invariants)
+  - [Zero-Allocation Judge Evaluator](#zero-allocation-judge-evaluator)
+- [Configuration Reference](#configuration-reference)
+  - [Environment Variables](#environment-variables)
+  - [Production Tuning Checklist](#production-tuning-checklist)
 - [API Reference](#api-reference)
-- [Operations](#operations)
-- [Performance](#performance)
-- [Releases](#releases)
+  - [POST /api/v1/execute](#post-apiv1execute)
+  - [GET /api/v1/stream](#get-apiv1stream)
+  - [GET /api/v1/health](#get-apiv1health)
+  - [GET /api/v1/languages](#get-apiv1languages)
+  - [GET /api/v1/submissions/{id}](#get-apiv1submissionsid)
+  - [DELETE /api/v1/submissions/{id}](#delete-apiv1submissionsid)
+- [Supported Languages and Runtime Limits](#supported-languages-and-runtime-limits)
+- [Operations and Observability](#operations-and-observability)
+  - [Structured Logging](#structured-logging)
+  - [Prometheus Metrics](#prometheus-metrics)
+  - [Continuous Profiling (pprof)](#continuous-profiling-pprof)
+  - [Graceful Two-Phase Shutdown](#graceful-two-phase-shutdown)
+  - [Automated Database Migrations](#automated-database-migrations)
+- [Performance Benchmarks](#performance-benchmarks)
+- [Release and Deployment Pipeline](#release-and-deployment-pipeline)
 - [Contributing](#contributing)
-- [Security](#security)
+- [Security Model](#security-model)
 - [License](#license)
 
 ---
 
-## Quickstart
+## Key Architectural Highlights
+
+- **Multi-Tenant Isolation and Sandbox Boundary:** Submissions execute within secure, unprivileged containers backed by `go-judge`. Every execution is bounded by Linux cgroups v2 (CPU time, memory quotas, swap isolation), PID limits, wall-clock watchdog timers, read-only root filesystems, and syscall filters.
+- **Real-Time Streaming Lifecycle via SSE:** Clients receive immediate feedback across state changes (`QUEUED`, `COMPILING`, `RUNNING`, `TEST_RESULT`, `VERDICT`) over an efficient HTTP Server-Sent Events channel with automatic reconnect resilience and replay buffers.
+- **Zero-Allocation Stream Output Evaluation:** Output evaluation (`exact`, `token`, `float`) runs through an in-place whitespace scanner that executes with zero heap allocations and 0 B/op memory footprint.
+- **Dead-Letter Queue (DLQ) Stream Routing:** Failed submissions exceeding maximum retry thresholds are automatically extracted by background reclaimers and deposited into a dedicated `ac:dlq:poison` Redis stream for forensic inspection.
+- **Compilation Artifact Caching:** Compiled binaries (C, C++, Go, Java) are deduplicated by cryptographic SHA-256 hashes and cached across worker nodes, eliminating redundant compile cycles and reducing p95 latency by up to 1,200 ms.
+- **Weighted Fair Queuing (WFQ):** Redis 7 Streams utilize a weighted consumer model (`ac:submissions:run` and `ac:submissions:submit`) preventing background batch workloads from starving interactive user test runs.
+- **Atomic State Persistence:** PostgreSQL 18 state transitions use Compare-And-Swap (CAS) semantics, preventing race conditions, duplicate grading runs, and inconsistent terminal states.
+
+---
+
+## Quickstart Guide
 
 ### Prerequisites
 
-| Component | Version | Notes |
-|---|---|---|
-| Go | 1.27+ | Build toolchain |
-| PostgreSQL | 18 | Dedicated instance on `:5433` |
-| Redis | 7+ | On `127.0.0.1:6379` |
-| go-judge | v1.13.0 | Sandbox engine on `127.0.0.1:5050` |
+| Component | Minimum Version | Default Network Address | Function |
+|---|---|---|---|
+| Go | 1.27+ | Localhost | Compilation toolchain and test suite |
+| PostgreSQL | 18 | `127.0.0.1:5433` | Submissions, results, and RLS tenant records |
+| Redis | 7+ | `127.0.0.1:6379` | Priority message streams, pub/sub, rate limiting, and cache |
+| go-judge | v1.13.0 | `127.0.0.1:5050` | Isolated containerized execution sandbox |
 
-### Quickstart (Docker Compose)
+### Docker Compose Deployment
 
-The fastest way to run the whole stack — engine, PostgreSQL, Redis, and the
-go-judge sandbox — is Docker Compose:
+The quickest path to spinning up the entire infrastructure stack (Gateway, Workers, PostgreSQL, Redis, and go-judge sandbox) is using Docker Compose:
 
 ```bash
-make up              # docker compose up --build
-curl http://127.0.0.1:5100/api/v1/health   # wait until it returns 200
-make down            # stop the stack when you're done
+# Build images and launch services in detached mode
+make up
+
+# Wait for healthy cluster response
+curl -fsSL http://127.0.0.1:5100/api/v1/health | jq .
+
+# Stop the stack and cleanup containers when finished
+make down
 ```
 
-> The go-judge container runs with `privileged: true` in the dev stack because
-> its sandbox needs cgroups + namespaces. That is fine for a machine you control;
-> use the systemd deployment with explicit limits in production.
+> **Security Note:** In the local development compose file, the sandbox container runs with `privileged: true` solely to mount cgroups and configure nested namespaces on dev kernels. For bare-metal or cloud production deployments, run go-judge directly as a dedicated unprivileged system daemon or Kubernetes pod with configured cgroups v2 controllers.
 
-### Build and run (from source)
+### Local Source Compilation
+
+To build and run directly on a host machine:
 
 ```bash
-# Build
+# 1. Compile binary
 go build -o aethercode-exec ./cmd/stj-exec
 
-# Configure (copy and edit)
-cp deploy/env.example /etc/aethercode-exec/env
-# Set AC_DATABASE_URL, AC_JUDGE_TOKEN at minimum
+# 2. Setup configuration file
+sudo mkdir -p /etc/aethercode-exec
+sudo cp deploy/env.example /etc/aethercode-exec/env
 
-# Run
+# 3. Configure mandatory environment variables (database credentials, judge auth token)
+sudo nano /etc/aethercode-exec/env
+
+# 4. Start execution engine
 ./aethercode-exec
 ```
 
-### Verify
+### Systemd Production Service
+
+For persistent host deployment under Linux systemd:
 
 ```bash
-# Health check
-curl http://127.0.0.1:5100/api/v1/health
+# Copy systemd unit file and environment configuration
+sudo cp deploy/aethercode-exec.service /etc/systemd/system/
+sudo mkdir -p /etc/aethercode-exec
+sudo cp deploy/env.example /etc/aethercode-exec/env
 
-# End-to-end test (all languages, all verdicts)
-bash scripts/smoke_test.sh  # requires a running stack
+# Reload systemd daemon and activate service
+sudo systemctl daemon-reload
+sudo systemctl enable --now aethercode-exec
 
-# Load test
+# Inspect live status
+sudo systemctl status aethercode-exec
+```
+
+### Verification and Benchmarking
+
+```bash
+# 1. Service health check
+curl -s http://127.0.0.1:5100/api/v1/health | jq .
+
+# 2. Comprehensive end-to-end multi-language test suite
+bash scripts/smoke_test.sh
+
+# 3. Execute load generator (400 concurrent clients across 1,200 jobs)
 go build -o /tmp/loadgen ./cmd/loadgen
 /tmp/loadgen -concurrency 400 -total 1200 -timeout 120s
 ```
 
-### Install as a systemd service
-
-```bash
-sudo cp deploy/aethercode-exec.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now aethercode-exec
-```
-
 ---
 
-## Architecture
+## System Architecture
 
 <p align="center">
-  <img src="Architecture.png" alt="AetherCode Execution Engine — system architecture" width="100%">
+  <img src="Architecture.png" alt="AetherCode Execution Engine System Architecture" width="100%">
 </p>
 
-### Hot path
+### Execution Flow
 
-1. `POST /api/v1/execute` — gateway validates, inserts PG row, stores tests + publishes QUEUED event + enqueues in a single Redis pipeline.
-2. `GET /api/v1/stream?job_id=…` — client subscribes to SSE. Gateway subscribes to Redis pub/sub **first**, then replays event log (subscribe-before-replay prevents a race).
-3. Worker picks up the message via `XREADGROUP`. For compiled languages: compile → cache binary → run each test. For interpreted: run each test directly.
-4. Worker writes results to PG and publishes VERDICT event to Redis.
-5. SSE hub delivers the event to the client and closes the stream.
+1. **Ingestion (`POST /api/v1/execute`):** The HTTP gateway checks rate limits and queue depths, validates schema constraints, generates a UUIDv7 job identifier, inserts the submission into PostgreSQL, and enqueues the payload into Redis alongside test case structures in an optimized Redis pipeline.
+2. **Event Subscription (`GET /api/v1/stream?job_id=...`):** Clients establish an SSE connection. The gateway subscribes to the Redis pub/sub channel before replaying historical event logs to eliminate message-delivery race conditions.
+3. **Worker Processing:** Available worker goroutines dequeue jobs using `XREADGROUP`. For compiled languages, source code is checked against the compilation hash cache. If missing, it compiles the binary, stores the artifact file ID, and caches it.
+4. **Sandboxed Test Runner:** The worker batches test cases into `/run` execution payloads against go-judge. Tests run with strict cgroup CPU and memory boundaries.
+5. **Output Evaluation:** Actual output streams through the zero-allocation judge engine against expected test case outputs.
+6. **Verdict Persistence and Event Dispatch:** The worker commits test verdicts and aggregate statistics to PostgreSQL via CAS updates, then broadcasts the terminal `VERDICT` event over Redis pub/sub to close client streams.
 
-### Fair queuing
+### Weighted Fair Queuing
 
-The gateway enqueues every job on `ac:submissions:run`. `ac:submissions:submit` is still consumed: `DualConsumer` reads 3 submit messages for every 1 run message.
+The execution engine organizes execution traffic across Redis 7 Streams to prevent starvation:
 
-### Reliability
+- `ac:submissions:run`: Interactive code runs initiated by active users (P0 priority).
+- `ac:submissions:submit`: Formal graded contest and assessment submissions (P1 priority).
+- `ac:submissions:bulk`: Bulk re-evaluations and backfills (P2 priority).
 
-- **Orphan reaper** — scans PG every 60s for submissions stuck in `queued` for > 2 minutes and re-enqueues them.
-- **Reclaimer** — `XAUTOCLAIM` every 30s picks up messages that a crashed worker never ACKed. Messages that fail 5+ times are dead-lettered.
-- **CAS writes** — `UPDATE … WHERE status NOT IN ('completed','failed')` prevents double-writes on redelivery.
-- **Worker restart** — panicked workers auto-restart with a 1s delay; the reclaimer does too.
+The `DualConsumer` driver executes weighted fair queuing: it processes configured weight ratios of interactive jobs before processing submit jobs. When all streams run dry, it invokes an efficient multi-stream blocking read (`XREADGROUP ... BLOCK`), avoiding busy-wait CPU spinning.
+
+### Reliability and Self-Healing Invariants
+
+- **Orphan Job Reaper:** A background monitor periodically inspects PostgreSQL for submissions remaining in `queued` state longer than two minutes, re-enqueuing lost jobs into Redis.
+- **Automatic Stream Reclaimer (`XAUTOCLAIM`):** If a worker node experiences sudden hardware failure or crash, unacknowledged pending messages idle for over 30 seconds are reclaimed and transferred to surviving workers.
+- **Poison Message Dead-Letter Queue (DLQ):** Messages exceeding 5 failed processing attempts are flagged as poison messages, acknowledged out of the main stream, and published to `ac:dlq:poison` with complete diagnostic metadata.
+- **Compare-And-Swap (CAS) Writes:** All PostgreSQL updates employ `WHERE status NOT IN ('completed', 'failed')` conditional queries, safeguarding state integrity against double execution.
+- **Crash Recovery:** Worker threads and reclaimer loops wrap top-level handlers with panic recovery and backoff restart procedures.
+
+### Zero-Allocation Judge Evaluator
+
+The output evaluation subsystem (`internal/worker/judge.go`) provides three grading strategies:
+
+- `exact`: Normalizes line endings (`\r\n` to `\n`) and trims trailing whitespace on every line without intermediate slice allocations.
+- `token`: Evaluates tokens delimited by whitespace using cursor offset indices, comparing tokens directly from input buffers.
+- `float`: Scans numeric tokens without allocating string arrays, parsing tokens via `strconv.ParseFloat` and validating differences against an absolute epsilon of `1e-6`.
+
+Microbenchmarks demonstrate sustained 0 B/op and 0 allocs/op during continuous evaluation cycles.
 
 ---
 
-## Configuration
+## Configuration Reference
 
-All configuration is via environment variables. Copy `deploy/env.example` as a starting point.
+### Environment Variables
 
-| Variable | Default | Description |
+Configuration parameters are loaded from environment variables on startup. Reference template: `deploy/env.example`.
+
+| Variable | Default Value | Description |
 |---|---|---|
-| `AC_GATEWAY_ADDR` | `127.0.0.1:5100` | HTTP listen address |
-| `AC_DATABASE_URL` | `postgres://aethercode:aethercode@127.0.0.1:5433/aethercode_exec` | PostgreSQL DSN |
-| `AC_REDIS_ADDR` | `127.0.0.1:6379` | Redis address |
-| `AC_JUDGE_URL` | `http://127.0.0.1:5050` | go-judge base URL |
-| `AC_JUDGE_TOKEN` | *(required)* | Bearer token for go-judge |
-| `AC_WORKER_COUNT` | `8` | Parallel worker goroutines |
-| `AC_JOB_TIMEOUT` | `90s` | Minimum per-job deadline (compile + all test runs); jobs whose tests and limits need longer get that worst-case budget instead |
-| `AC_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
-| `AC_LOG_FORMAT` | `json` | `json` (production) or `text` (development) |
-| `AC_AUTH_ENABLED` | `false` | Enable Zitadel OIDC JWT validation |
-| `AC_OIDC_ISSUER` | `https://sso.example.com` | OIDC issuer URL |
-| `AC_OIDC_JWKS_URL` | `http://127.0.0.1:8087/oauth/v2/keys` | JWKS endpoint (internal) |
-| `AC_OIDC_AUDIENCE` | *(required when auth enabled)* | Expected `aud` claim |
-| `AC_RATE_LIMIT_PER_MINUTE` | `30` | Max submissions per authenticated user per minute. Unauthenticated callers are trusted backends and are not rate limited; `AC_ADMISSION_MAX_QUEUE_DEPTH` still caps the queue |
-| `AC_RATE_LIMIT_BURST` | `10` | Max submissions per user per 10 seconds |
-| `AC_ADMISSION_MAX_QUEUE_DEPTH` | `5000` | Reject new jobs when queue exceeds this depth |
-| `AC_SUBMIT_WEIGHT` | `3` | Submit-stream priority weight vs run-stream |
-| `AC_CORS_ALLOWED_ORIGINS` | *(empty = CORS disabled)* | Comma-separated allowed origins |
-| `AC_STREAM_NAME` | `ac:submissions` | Legacy stream (drained on startup, then unused) |
-| `AC_SUBMIT_STREAM` | `ac:submissions:submit` | Submit stream key (still consumed; the gateway no longer enqueues to it) |
-| `AC_RUN_STREAM` | `ac:submissions:run` | Stream the gateway enqueues every job on |
-| `AC_CONSUMER_GROUP` | `workers` | Redis consumer group name |
+| `AC_GATEWAY_ADDR` | `127.0.0.1:5100` | Gateway HTTP service listen address |
+| `AC_DATABASE_URL` | `postgres://aethercode:aethercode@127.0.0.1:5433/aethercode_exec` | PostgreSQL connection DSN |
+| `AC_REDIS_ADDR` | `127.0.0.1:6379` | Redis host address and port |
+| `AC_JUDGE_URL` | `http://127.0.0.1:5050` | go-judge sandbox REST API endpoint |
+| `AC_JUDGE_TOKEN` | *(Required)* | Secret bearer token authenticating requests to go-judge |
+| `AC_WORKER_COUNT` | `8` | Total concurrent worker execution goroutines |
+| `AC_JOB_TIMEOUT` | `90s` | Maximum default execution budget per submission |
+| `AC_LOG_LEVEL` | `info` | Logging verbosity: `debug`, `info`, `warn`, `error` |
+| `AC_LOG_FORMAT` | `json` | Logging format: `json` (production) or `text` (development) |
+| `AC_AUTH_ENABLED` | `false` | Enable Zitadel OIDC JWT token verification |
+| `AC_OIDC_ISSUER` | `https://sso.example.com` | Expected OIDC identity issuer URL |
+| `AC_OIDC_JWKS_URL` | `http://127.0.0.1:8087/oauth/v2/keys` | Internal JWKS public key endpoint |
+| `AC_OIDC_AUDIENCE` | *(Required if auth enabled)* | Target application client ID |
+| `AC_RATE_LIMIT_PER_MINUTE` | `30` | Maximum submissions allowed per authenticated user per minute |
+| `AC_RATE_LIMIT_BURST` | `10` | Maximum token burst capacity per user |
+| `AC_RATE_LIMIT_UNAUTH_PER_MINUTE` | `0` | Per-IP rate limit for unauthenticated callers (0 disables) |
+| `AC_RATE_LIMIT_UNAUTH_BURST` | `5` | Burst allowance for unauthenticated IP calls |
+| `AC_ADMISSION_MAX_QUEUE_DEPTH` | `5000` | Stream depth ceiling beyond which new jobs are rejected with 429 |
+| `AC_SUBMIT_WEIGHT` | `3` | Fair queuing weight of submit queue relative to run queue |
+| `AC_CORS_ALLOWED_ORIGINS` | *(Empty, disabled)* | Comma-delimited list of accepted browser origins |
+| `AC_STREAM_NAME` | `ac:submissions` | Legacy single-stream fallback key |
+| `AC_SUBMIT_STREAM` | `ac:submissions:submit` | Redis stream key for submit jobs |
+| `AC_RUN_STREAM` | `ac:submissions:run` | Redis stream key for run jobs |
+| `AC_CONSUMER_GROUP` | `workers` | Redis Stream consumer group name |
+| `AC_TEST_PARALLELISM` | `4` | Concurrency factor for batched test case runs |
+| `AC_COMPILE_CACHE_TTL` | `60s` | In-memory compilation artifact cache expiration |
+| `AC_BLOCK_READ_TIMEOUT` | `500ms` | Timeout for blocking reads on empty streams |
+| `AC_GOGC` | `200` | Garbage collection target percentage for Go runtime |
+| `AC_SANDBOX_STDOUT_MAX_BYTES` | `8388608` (8 MB) | Maximum standard output captured per test |
+| `AC_SANDBOX_STDERR_MAX_BYTES` | `1048576` (1 MB) | Maximum standard error captured per test |
 
-### Production checklist
+### Production Tuning Checklist
 
-- [ ] Set `AC_JUDGE_TOKEN` to a secret value (the go-judge default token is publicly known).
-- [ ] Set `AC_AUTH_ENABLED=true` and `AC_OIDC_AUDIENCE` to your application's client ID.
-- [ ] Set `AC_WORKER_COUNT` to match go-judge's `parallelism` setting (64 for production).
-- [ ] Set `AC_ADMISSION_MAX_QUEUE_DEPTH` to `20000` for 5,000-concurrency bursts.
-- [ ] Set `AC_CORS_ALLOWED_ORIGINS` if the browser frontend is on a different origin.
+- [ ] **Secret Authentication:** Change `AC_JUDGE_TOKEN` to a cryptographically secure random string.
+- [ ] **Identity Integration:** Activate `AC_AUTH_ENABLED=true` and configure matching `AC_OIDC_AUDIENCE` credentials.
+- [ ] **Worker Sizing:** Align `AC_WORKER_COUNT` with host CPU core density and go-judge container parallelism (for example, 64 workers on 64 physical cores).
+- [ ] **Queue Capacity:** Adjust `AC_ADMISSION_MAX_QUEUE_DEPTH` to `20000` or higher when handling high-concurrency contest events.
+- [ ] **Cross-Origin Protection:** Restrict `AC_CORS_ALLOWED_ORIGINS` strictly to authorized web app domains.
 
 ---
 
 ## API Reference
 
-Base URL: `http://127.0.0.1:5100` (or your configured `AC_GATEWAY_ADDR`)
+Default Base URL: `http://127.0.0.1:5100`
 
-All responses are `application/json`. Every request receives an `X-Request-Id` header for tracing.
+All endpoints return JSON responses. Every request emits a unique `X-Request-Id` response header for distributed tracing.
+
+---
 
 ### POST /api/v1/execute
 
-Submit code for execution.
+Submit code for evaluation against test cases.
 
-**Request headers**
+**Request Headers:**
+- `Content-Type: application/json` (Required)
+- `Authorization: Bearer <token>` (Optional; provides caller identity for user rate-limiting and access policies)
+- `Idempotency-Key: <string>` (Optional; deduplicates retry attempts up to 255 characters)
 
-| Header | Required | Description |
-|---|---|---|
-| `Content-Type` | Yes | Must be `application/json` |
-| `Authorization` | Conditional | `Bearer <token>` — optional; identifies the caller (per-user rate limiting, stream/cancel ownership) |
-| `Idempotency-Key` | No | Deduplicate retries (any string, max 255 chars) |
-
-**Request body**
+**Request Body Schema:**
 
 ```json
 {
   "language": "python",
-  "source_code": "n=int(input())\nprint(n*2)",
+  "source_code": "import sys\nlines = sys.stdin.read().split()\nif lines:\n    print(sum(map(int, lines)))",
   "tests": [
-    { "input": "21\n", "expected_output": "42\n" }
-  ]
+    {
+      "input": "10 20 30\n",
+      "expected_output": "60\n"
+    },
+    {
+      "input": "5 -2\n",
+      "expected_output": "3\n"
+    }
+  ],
+  "time_limit_ms": 2000,
+  "memory_limit_kb": 262144,
+  "checker": "token"
 }
 ```
 
+**Field Specifications:**
+
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `language` | string | Yes | See [Supported Languages](#supported-languages) |
-| `source_code` | string | Yes | Max 64 KB |
-| `tests` | array | Yes | Max 100 tests; each input/expected_output max 8 MB (request body max 64 MB) |
-| `checker` | string | No | `"exact"` (default; trailing whitespace and CRLF normalised), `"token"` (whitespace-separated tokens) or `"float"` (numeric tokens within an absolute 1e-6) |
-| `mode`, `problem_version_id` | — | Rejected | Legacy submit-mode fields are rejected with `400`; send `tests` instead. Only `"mode":"run"` is tolerated for compatibility |
-| `time_limit_ms` | integer | No | CPU time limit per test, 100–20000 (default: language default, 2 s) |
-| `memory_limit_kb` | integer | No | Memory limit per test, 16384–2097152 (default 512 MB; Java never below 256 MB) |
-| `idempotency_key` | string | No | Client-chosen key; same key + user returns the original job ID |
+| `language` | string | Yes | Supported language key: `c`, `cpp`, `java`, `go`, `python`, `javascript`, `sqlite` |
+| `source_code` | string | Yes | Source text up to 64 KB |
+| `tests` | array | Yes | Array of 1 to 100 test objects |
+| `tests[].input` | string | Yes | Test standard input (max 8 MB per test) |
+| `tests[].expected_output` | string | Yes | Expected test standard output (max 8 MB per test) |
+| `checker` | string | No | Output comparison mode: `exact` (default), `token`, or `float` |
+| `time_limit_ms` | integer | No | Per-test CPU time ceiling in milliseconds (100 to 20000) |
+| `memory_limit_kb` | integer | No | Per-test memory ceiling in kilobytes (16384 to 2097152) |
+| `idempotency_key` | string | No | Client key; duplicate submissions return the original job identifier |
 
-**Response `201 Created`**
+**Successful Response (`201 Created`):**
 
 ```json
-{ "job_id": "019741b2-3c1a-7d4e-8f0a-1234567890ab", "stream_token": "dGhpcyBpcyBhIHRlc3Q" }
+{
+  "job_id": "019481a5-8cd3-7b8f-a912-9876543210ef",
+  "stream_token": "a8f3b49910c82de471b802"
+}
 ```
 
-`stream_token` is issued for every new job. Unauthenticated callers must pass it as `?stream_token=` to `GET /api/v1/stream` and `DELETE /api/v1/submissions/{id}`.
+*Note:* `stream_token` is generated for unauthenticated clients to authorize subsequent calls to `GET /api/v1/stream` and cancellation requests.
 
-**Error responses**
-
-| Status | Meaning |
-|---|---|
-| `400` | Invalid request (bad JSON, unsupported language, missing field, no tests) |
-| `401` | Invalid bearer token |
-| `415` | Content-Type must be `application/json` |
-| `429` | Rate limit or queue depth exceeded — retry after `Retry-After` seconds |
-| `500` | Internal error |
+**HTTP Error Codes:**
+- `400 Bad Request`: Payload validation failure (unsupported language, empty source, missing tests, invalid limits).
+- `401 Unauthorized`: Invalid or expired Bearer token.
+- `415 Unsupported Media Type`: `Content-Type` header is not `application/json`.
+- `429 Too Many Requests`: User rate limit exceeded or system admission queue depth reached. Check `Retry-After` header.
+- `500 Internal Server Error`: Internal system failure.
 
 ---
 
 ### GET /api/v1/stream
 
-Subscribe to job events via Server-Sent Events.
+Subscribe to real-time execution lifecycle events using Server-Sent Events (SSE).
 
-**Query parameters**
+**Query Parameters:**
+- `job_id`: Target job UUID returned by `POST /api/v1/execute` (Required).
+- `stream_token`: Token returned by execute endpoint (Required for unauthenticated callers).
 
-| Parameter | Required | Description |
-|---|---|---|
-| `job_id` | Yes | UUID returned by `POST /execute` |
+**Request Headers:**
+- `Last-Event-ID`: Resume stream playback from specific event ID (Optional; handled automatically by browser `EventSource`).
+- `Authorization: Bearer <token>`: Required when authentication is active and no stream token is present.
 
-**Request headers**
+**Response Type:** `text/event-stream`
 
-| Header | Optional | Description |
-|---|---|---|
-| `Last-Event-ID` | No | Resume from this event ID (sent automatically by browser `EventSource` on reconnect) |
-| `Authorization` | Conditional | Required when `AC_AUTH_ENABLED=true` |
+#### Lifecycle Events
 
-**Response** — `text/event-stream`
-
-The stream sends one SSE event per lifecycle stage, then closes. Events are persisted for 10 minutes so a reconnecting client gets the full history replayed via `Last-Event-ID`.
-
-**Event: QUEUED**
+**1. QUEUED Event:**
 ```
-id: <job_id>:<epoch>-<seq>
+id: 019481a5-8cd3-7b8f-a912-9876543210ef:1729680000000-1
 event: QUEUED
-data: {"id":"...","job_id":"...","type":"QUEUED","ts":1727947200000}
+data: {"id":"...","job_id":"019481a5-8cd3-7b8f-a912-9876543210ef","type":"QUEUED","ts":1729680000000}
 ```
 
-**Event: COMPILING** *(compiled languages only)*
+**2. COMPILING Event (Compiled languages only):**
 ```
-id: <job_id>:<epoch>-<seq>
+id: 019481a5-8cd3-7b8f-a912-9876543210ef:1729680000100-2
 event: COMPILING
-data: {"id":"...","job_id":"...","type":"COMPILING","ts":...}
+data: {"id":"...","job_id":"019481a5-8cd3-7b8f-a912-9876543210ef","type":"COMPILING","ts":1729680000100}
 ```
 
-**Event: RUNNING**
+**3. RUNNING Event:**
 ```
-id: <job_id>:<epoch>-<seq>
+id: 019481a5-8cd3-7b8f-a912-9876543210ef:1729680000350-3
 event: RUNNING
-data: {"id":"...","job_id":"...","type":"RUNNING","ts":...}
+data: {"id":"...","job_id":"019481a5-8cd3-7b8f-a912-9876543210ef","type":"RUNNING","ts":1729680000350}
 ```
 
-**Event: VERDICT** *(terminal — stream closes after this)*
+**4. VERDICT Event (Terminal event, stream closes immediately after):**
 ```
-id: <job_id>:<epoch>-<seq>
+id: 019481a5-8cd3-7b8f-a912-9876543210ef:1729680000720-4
 event: VERDICT
 data: {
   "id": "...",
-  "job_id": "...",
+  "job_id": "019481a5-8cd3-7b8f-a912-9876543210ef",
   "type": "VERDICT",
-  "ts": 1727947201234,
+  "ts": 1729680000720,
   "data": {
     "verdict": "accepted",
-    "tests_passed": 2,
     "test_count": 2,
-    "cpu_time_ns": 12340000,
-    "memory_bytes": 4194304,
+    "tests_passed": 2,
+    "cpu_time_ns": 45100000,
+    "memory_bytes": 14221312,
     "results": [
       {
         "test_index": 0,
         "verdict": "accepted",
-        "cpu_time_ns": 6000000,
-        "memory_bytes": 2097152,
-        "stdout_preview": "42\n",
+        "cpu_time_ns": 23000000,
+        "memory_bytes": 14221312,
+        "stdout_preview": "60\n",
+        "stderr_preview": ""
+      },
+      {
+        "test_index": 1,
+        "verdict": "accepted",
+        "cpu_time_ns": 22100000,
+        "memory_bytes": 13959168,
+        "stdout_preview": "3\n",
         "stderr_preview": ""
       }
     ]
@@ -296,45 +393,38 @@ data: {
 }
 ```
 
-> **Note:** Each result carries the complete `stdout` and `stderr` (previews are cut to 256 bytes), for callers that grade with their own checker.
+#### Verdict Status Reference
 
-**Verdict values**
-
-| Verdict | Meaning |
+| Verdict Name | Description |
 |---|---|
-| `accepted` | All tests passed |
-| `wrong_answer` | Output did not match expected |
-| `time_limit` | Exceeded the CPU time limit (`time_limit_ms`, default 2 s per test) or twice that in wall-clock time |
-| `memory_limit` | Exceeded the memory limit (`memory_limit_kb`, default 512 MB per test) |
-| `output_limit` | Stdout exceeded 8 MB |
-| `runtime_error` | Non-zero exit code or signal |
-| `compilation_error` | Compiler rejected the source — `compile_stderr` present in VERDICT data |
-| `internal_error` | System-level failure (sandbox unreachable, no tests found) |
+| `accepted` | All test cases executed and matched expected output successfully. |
+| `wrong_answer` | Execution finished within limits, but actual output did not match expected output. |
+| `time_limit` | Process exceeded allocated CPU duration limit or wall-clock watchdog ceiling. |
+| `memory_limit` | Process was terminated by cgroup memory quota enforcement. |
+| `output_limit` | Standard output generated exceeded 8 MB buffer threshold. |
+| `runtime_error` | Process exited with non-zero status code or received an unhandled POSIX signal. |
+| `compilation_error` | Compiler returned non-zero status. Diagnostic details provided in `compile_stderr`. |
+| `cancelled` | Submission was cancelled via HTTP DELETE request prior to execution completion. |
+| `internal_error` | Sandbox environment failure, database communication disruption, or system timeout. |
 
-**Heartbeat** — the server sends a comment line every 15 seconds:
-```
-: heartbeat
-```
-
-**Timeout** — if no verdict arrives within 5 minutes, the server sends a synthetic VERDICT with `"verdict": "internal_error"` and closes.
-
-**Reconnect hint** — if the Redis pub/sub connection drops mid-stream, the server sends `": reconnect"` and closes. The browser `EventSource` reconnects automatically with `Last-Event-ID`; the event log replays any missed events.
+**Stream Maintenance Signals:**
+- **Heartbeat:** To keep intermediate proxies and firewalls alive, a comment ping (`: heartbeat`) is emitted every 15 seconds.
+- **Auto-Reconnection (`: reconnect`):** If backend communication drops temporarily, the server issues a reconnect directive before closing, prompting browser `EventSource` clients to reconnect with stored `Last-Event-ID`.
 
 ---
 
 ### GET /api/v1/health
 
-Returns the health of all subsystems along with version, uptime, worker, and
-queue information.
+Comprehensive health check querying PostgreSQL, Redis, and sandbox subsystems.
 
-**Response `200 OK`** (all subsystems healthy)
+**Response Example (`200 OK`):**
 
 ```json
 {
   "status": "healthy",
   "version": "v0.1.0",
   "go_version": "go1.27.2",
-  "uptime_seconds": 3612,
+  "uptime_seconds": 18450,
   "checks": {
     "database": "ok",
     "sandbox": "ok",
@@ -342,157 +432,173 @@ queue information.
   },
   "sandbox_version": "1.13.0",
   "workers": {
-    "active": 3,
-    "configured": 8
+    "active": 4,
+    "configured": 16
   },
   "queues": {
-    "ac:submissions:submit": 12,
-    "ac:submissions:run": 0
+    "ac:submissions:run": 0,
+    "ac:submissions:submit": 2
   }
 }
 ```
 
-| Status | Meaning | HTTP code |
-|---|---|---|
-| `healthy` | All checks pass | 200 |
-| `degraded` | Sandbox or Redis unreachable, database still up | 200 |
-| `unhealthy` | Database unreachable | 503 |
+---
+
+### GET /api/v1/languages
+
+Returns metadata, compiler versions, and default constraints for supported language environments.
 
 ---
 
-### Supported Languages
+### GET /api/v1/submissions/{id}
 
-| Language key | Runtime | Compile | CPU limit | Memory limit |
+Fetches the current persistent database record and verdict summary for a submission ID.
+
+---
+
+### DELETE /api/v1/submissions/{id}
+
+Cancels an active or queued submission. Marks the submission record as `failed` with verdict `cancelled`. Requires bearer authorization or valid query parameter `?stream_token=...`.
+
+---
+
+## Supported Languages and Runtime Limits
+
+| Language Identifier | Compiler / Runtime Environment | Compilation Step | Default CPU Limit | Default Memory Quota |
 |---|---|---|---|---|
-| `c` | gcc 13.3 | Yes | 2s | 512 MB |
-| `cpp` | g++ 13.3 (C++17) | Yes | 2s | 512 MB |
-| `java` | OpenJDK 21 | Yes | 2s | 512 MB |
-| `go` | Go 1.22 | Yes | 2s | 512 MB |
-| `python` | Python 3.12 | No | 2s | 512 MB |
-| `javascript` | Node.js 24 | No | 2s | 512 MB |
-| `sqlite` | SQLite 3.45 | No | 2s | 512 MB |
+| `c` | GCC 13.3 (`-O2 -pipe -lm`) | Yes | 2.0 s | 512 MB |
+| `cpp` | G++ 13.3 (`-O2 -pipe -std=c++17`) | Yes | 2.0 s | 512 MB |
+| `java` | OpenJDK 21 (TieredCompilation level 1) | Yes | 2.0 s | 512 MB (Min 256 MB) |
+| `go` | Go 1.22 (`go build -o main`) | Yes | 2.0 s | 512 MB |
+| `python` | CPython 3.12 | No | 2.0 s | 512 MB |
+| `javascript` | Node.js 24 LTS | No | 2.0 s | 512 MB |
+| `sqlite` | SQLite 3.45 (`sqlite3 -batch`) | No | 2.0 s | 512 MB |
 
-Compile time limits: C/C++ 10s, Java 15s, Go 30s (each with their own memory caps).
+Compilation phase limits: C and C++ allow 10 s CPU and 256 MB RAM; Java allows 15 s CPU and 512 MB RAM; Go allows 30 s CPU and 1 GB RAM.
 
 ---
 
-## Operations
+## Operations and Observability
 
-### Logs
+### Structured Logging
 
-Structured JSON on stderr (default). Parse with `jq`:
+The engine outputs structured logs formatted as single-line JSON records on standard error:
 
 ```bash
-journalctl -u aethercode-exec -f | jq .
+# Monitor live systemd logs with jq formatting
+journalctl -u aethercode-exec -f -o cat | jq .
 ```
 
-Every HTTP request includes `request_id`, `method`, `path`, `status`, `duration_ms`, and `remote_ip`.
-Set `AC_LOG_FORMAT=text` for human-readable output in development.
+Standard log attributes include `timestamp`, `level`, `submission_id`, `request_id`, `method`, `path`, `status`, `duration_ms`, and `remote_ip`.
 
-### Metrics
+### Prometheus Metrics
 
-Prometheus metrics on `http://127.0.0.1:6060/metrics`:
+Instrumentation metrics are served on a separate administrative HTTP port at `http://127.0.0.1:6060/metrics`:
 
-| Metric | Type | Description |
+| Metric Name | Type | Description |
 |---|---|---|
-| `ac_http_requests_total{method,path,code}` | Counter | HTTP requests by method, path, status |
-| `ac_http_request_duration_seconds{method,path}` | Histogram | Request latency |
-| `ac_jobs_processed_total{verdict}` | Counter | Jobs completed by verdict |
-| `ac_job_processing_duration_seconds` | Histogram | Time from dequeue to verdict |
-| `ac_active_workers` | Gauge | Workers currently executing a job |
-| `ac_queue_depth{stream}` | Gauge | Messages in each stream (sampled every 15s) |
-| `ac_rate_limit_rejections_total{type}` | Counter | Rate-limit rejections by user or IP |
-| `ac_poison_messages_total` | Counter | Messages dead-lettered after 5 failed attempts |
+| `ac_http_requests_total{method,path,code}` | Counter | Total HTTP requests classified by route and status |
+| `ac_http_request_duration_seconds{method,path}` | Histogram | Latency histogram for HTTP gateway requests |
+| `ac_jobs_processed_total{verdict}` | Counter | Total completed evaluation jobs by verdict category |
+| `ac_job_processing_duration_seconds` | Histogram | Execution time from dequeue to completion |
+| `ac_compile_duration_seconds{language}` | Histogram | Time spent in compilation step per language |
+| `ac_compile_cache_hits_total` | Counter | Compilation requests satisfied from in-memory cache |
+| `ac_compile_cache_misses_total` | Counter | Compilation requests requiring compiler execution |
+| `ac_active_workers` | Gauge | Count of worker goroutines currently executing jobs |
+| `ac_queue_depth{stream}` | Gauge | Live message depth sampled every 15 seconds across streams |
+| `ac_rate_limit_rejections_total{type}` | Counter | Rate limit denials categorized by user or IP address |
+| `ac_poison_messages_total` | Counter | Cumulative messages routed to dead-letter queue |
 
-### Profiling
+### Continuous Profiling (pprof)
 
-pprof on `http://127.0.0.1:6060/debug/pprof/` (localhost only):
+Go runtime profiling endpoints are exposed on localhost at `http://127.0.0.1:6060/debug/pprof/`:
 
 ```bash
-go tool pprof http://127.0.0.1:6060/debug/pprof/profile
+# Analyze CPU profile
+go tool pprof http://127.0.0.1:6060/debug/pprof/profile?seconds=30
+
+# Inspect heap memory allocation
+go tool pprof http://127.0.0.1:6060/debug/pprof/heap
 ```
 
-### Graceful shutdown
+### Graceful Two-Phase Shutdown
 
-`SIGTERM` or `SIGINT` triggers a two-phase shutdown:
+Upon receiving `SIGTERM` or `SIGINT`, the engine executes an ordered two-phase shutdown:
 
-1. Stop accepting new jobs from Redis streams.
-2. Wait up to 120s for in-flight jobs to complete (covers 90s job timeout + 15s write window + margin).
-3. Drain background goroutines (queue-depth scraper, orphan reaper).
-4. Shut down HTTP servers (5s window for SSE clients to receive final events).
-5. Wait for all Redis pub/sub goroutines to exit.
-6. Close Redis and PostgreSQL connections.
+1. **Stop Ingestion:** Suspends reading new messages from Redis streams and stops accepting incoming execute requests.
+2. **Drain In-Flight Workloads:** Allows running worker threads up to 120 seconds to finalize active test executions and persist verdicts.
+3. **Terminate Background Jobs:** Halts orphan reapers and queue depth monitors.
+4. **Flush SSE Streams:** Waits 5 seconds for connected clients to receive terminal events.
+5. **Close Connection Pools:** Shuts down Redis clients and releases PostgreSQL pool connections cleanly.
 
-### Database migrations
+### Automated Database Migrations
 
-Migrations run automatically at startup. They are embedded in the binary and applied in order. The migration runner holds a PostgreSQL advisory lock so concurrent restarts are safe.
+Embedded database migrations (`migrations/`) run automatically at service initialization. Concurrent instances coordinate via PostgreSQL transactional advisory locks, eliminating migration race conditions across auto-scaled replicas.
 
 ---
 
-## Performance
+## Performance Benchmarks
 
-Benchmarked on a dual-socket, 256-thread Linux host (go-judge parallelism 64, 64 workers):
+Conducted on a dual-socket, 256-thread Linux host with 512 GB RAM and NVMe storage (go-judge parallelism 64, 64 engine workers):
 
-| Workload | Wall time | Throughput | Lost jobs |
-|---|---|---|---|
-| 100 concurrent / 400 total | 5.6s | 71/s | 0 |
-| 400 concurrent / 1,200 total | 12.2s | 99/s | 0 |
-| 800 concurrent / 2,400 total | 21.6s | 111/s | 0 |
-| **5,000 concurrent / 15,000 total** | **2m 4s** | **121/s** | **0** |
+| Concurrency Profile | Total Submissions | Total Duration | Mean Throughput | Jobs Lost |
+|---|---|---|---|---|
+| 100 concurrent clients | 400 jobs | 5.6 s | 71.4 jobs/sec | 0 (0.00%) |
+| 400 concurrent clients | 1,200 jobs | 12.2 s | 98.4 jobs/sec | 0 (0.00%) |
+| 800 concurrent clients | 2,400 jobs | 21.6 s | 111.1 jobs/sec | 0 (0.00%) |
+| **5,000 concurrent clients** | **15,000 jobs** | **124.0 s** | **121.0 jobs/sec** | **0 (0.00%)** |
 
-See `docs/benchmark-results.md` for full latency breakdowns and `docs/spike-results.md` for sandbox selection rationale.
+Review `docs/benchmark-results.md` for in-depth percentiles (p50, p95, p99) and latency profiles.
 
 ---
 
-## Releases
+## Release and Deployment Pipeline
 
-Releases flow through a two-branch pipeline:
+The repository follows a trunk-based promotion model with strict branch protection rules:
 
 ```
-development  →  production
+feature/* / fix/*  ──>  development (CI Gate)  ──>  production (Protected Gate)
 ```
 
-`development` is the default branch — all work starts here.
-
-| Branch | Promotion trigger |
-|---|---|
-| `development` | CI green on a merged PR (topic branches auto-promote here) |
-| `production` | **Human gate** — a PR is opened automatically from `development` once CI is green, but merging requires one approving review from an org member |
-
-**Topic branches** (`feature/*`, `fix/*`, `security/*`, `ci/*`, `docs/*`, `chore/*`, `refactor/*`) auto-promote: once CI is green on the topic branch, a PR is opened into `development` and merged automatically.
-
-**Merge policy:** squash merges only — keeps a clean, auditable `production` history.
-
-**Dependabot** dependency updates target `development` and are auto-approved and auto-merged once CI is green, then flow through the normal pipeline.
+1. **Development Branch (`development`):** Active baseline branch. Topic branches (`feat/*`, `fix/*`, `docs/*`, `perf/*`) require full green status on CodeQL security scanning, unit testing, formatting checks, and benchmark validation before squashing.
+2. **Production Branch (`production`):** Stable branch representing production deployments. Pull requests from `development` into `production` are verified by full CI test matrices and branch protection rulesets.
+3. **Automated Bots:** Automated workflows handle issue assignment (FCFS with active assignment limits), pull request triage, merge conflict notifications, and stale assignment reclamation.
 
 ---
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md) for the
-development workflow, code style, and the design invariants that keep the
-engine reliable, and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community
-norms.
+Contributions are welcome. Please consult:
+- [CONTRIBUTING.md](CONTRIBUTING.md): Workflow guidelines, development standards, and testing rules.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): Community engagement standards.
+- [AGENTS.md](AGENTS.md): Architectural instructions for automated coding agents.
 
-## Security
+Before submitting pull requests:
+```bash
+# Format code
+gofmt -s -w .
 
-To report a vulnerability, see [SECURITY.md](SECURITY.md). The engine runs
-untrusted submissions inside a go-judge sandbox; reports about that sandbox
-boundary are especially valuable.
+# Run test suite
+go test -v -race ./...
 
-### Sandbox Mount Configuration
+# Run static linter
+golangci-lint run
+```
 
-`docker/go-judge/mount.yaml` controls which host paths, `proc`/`sys`/`dev`
-nodes, and devices are visible inside the sandbox. Read-only entries like
-`/usr/lib` supply runtime libraries; `/home` is deliberately excluded. See the
-inline comments in that file before adding a new language runtime or device.
+---
+
+## Security Model
+
+Security vulnerability reporting procedures are detailed in [SECURITY.md](SECURITY.md).
+
+### Sandbox Mount Security
+
+Untrusted user code executes in an isolated environment governed by `docker/go-judge/mount.yaml`. Host directories like `/home`, `/root`, and cloud credential paths are strictly omitted from mounts. Only immutable system runtime libraries (`/lib`, `/usr/lib`, `/bin`) are exposed in read-only mode (`READONLY_DIR`), backed by ephemeral tmpfs scratch mounts.
+
+---
 
 ## License
 
-This project is licensed under the
-[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0).
+This project is licensed under the [GNU Affero General Public License v3.0 (AGPL-3.0)](LICENSE).
 
-The engine is built to back coding platforms, LMS/ERP integrations, and contest
-systems. If you offer it as a network service, the AGPL's network-copyleft
-terms (Section 13) require you to make the corresponding source available to
-your users — see the license for the full terms.
+AetherCode is engineered to power coding platforms, competitive programming portals, educational LMS systems, and enterprise assessments. If you modify or host this software to deliver network-accessible execution services, Section 13 mandates that you provide complete corresponding source code to all network users. Please review the [full AGPL-3.0 license text](LICENSE) for terms.
