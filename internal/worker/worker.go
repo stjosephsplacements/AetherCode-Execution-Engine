@@ -95,11 +95,13 @@ func (w *Worker) runWorker(ctx context.Context, consumer string) (panicked bool)
 }
 
 type testData struct {
-	Input           string
-	ExpectedOutput  string
-	CheckerType     string // "exact" | "token" | "float" | "custom"; empty means exact
-	CheckerCode     string
-	CheckerLanguage string
+	Input              string
+	ExpectedOutput     string
+	CheckerType        string // "exact" | "token" | "float" | "custom"; empty means exact
+	CheckerCode        string
+	CheckerLanguage    string
+	InteractorCode     string
+	InteractorLanguage string
 }
 
 func (w *Worker) process(ctx context.Context, submissionID string) error {
@@ -296,11 +298,13 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandb
 	tests := make([]testData, len(set.Tests))
 	for i, rt := range set.Tests {
 		tests[i] = testData{
-			Input:           rt.Input,
-			ExpectedOutput:  rt.ExpectedOutput,
-			CheckerType:     set.Checker,
-			CheckerCode:     set.CheckerCode,
-			CheckerLanguage: set.CheckerLanguage,
+			Input:              rt.Input,
+			ExpectedOutput:     rt.ExpectedOutput,
+			CheckerType:        set.Checker,
+			CheckerCode:        set.CheckerCode,
+			CheckerLanguage:    set.CheckerLanguage,
+			InteractorCode:     set.InteractorCode,
+			InteractorLanguage: set.InteractorLanguage,
 		}
 	}
 	return tests, set.Limits, set.Files, set.CompilerFlags, nil
@@ -390,6 +394,16 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 		custom = c
 	}
 
+	// If interactive interactor is provided, prepare it before running tests.
+	var it *interactor
+	if len(tests) > 0 && tests[0].InteractorCode != "" {
+		prepIt, err := w.prepareInteractor(ctx, tests[0].InteractorLanguage, tests[0].InteractorCode, log)
+		if err != nil {
+			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("interactor setup: %w", err)
+		}
+		it = prepIt
+	}
+
 	for batchStart := 0; batchStart < len(tests); batchStart += maxBatchSize {
 		if ctx.Err() != nil {
 			log.Warn("job context expired, skipping remaining tests", "completed", batchStart, "total", len(tests))
@@ -405,47 +419,114 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 		batchEnd := min(batchStart+maxBatchSize, len(tests))
 		batch := tests[batchStart:batchEnd]
 
-		cmds := make([]sandbox.Cmd, len(batch))
-		for i, tc := range batch {
-			cmds[i] = sandbox.BuildRunCmdWithOptions(lang, sourceCode, tc.Input, fileID, limits, extraFiles)
+		if it != nil {
+			// For interactive runs, execute one-by-one with bidirectional pipeMapping
+			for i, tc := range batch {
+				interactiveCmds, pipeMapping := buildInteractiveCmds(lang, sourceCode, fileID, limits, extraFiles, it, tc.Input, tc.ExpectedOutput)
+				runResults, runErr := w.judge.Run(ctx, sandbox.Request{
+					Cmd:         interactiveCmds,
+					PipeMapping: pipeMapping,
+				})
+				testIndex := batchStart + i
+				if runErr != nil || len(runResults) < 2 {
+					tr := model.TestResult{TestIndex: testIndex, Verdict: model.VerdictInternalError}
+					results = append(results, tr)
+					if overallVerdict == model.VerdictAccepted {
+						overallVerdict = model.VerdictInternalError
+					}
+					continue
+				}
+
+				studentRes := runResults[0]
+				interactorRes := runResults[1]
+
+				tr := model.TestResult{
+					TestIndex:     testIndex,
+					CPUTimeNs:     int64(studentRes.Time),   //nolint:gosec // go-judge reports CPU time in ns
+					MemoryBytes:   int64(studentRes.Memory), //nolint:gosec // go-judge reports memory in bytes
+					StdoutPreview: studentRes.Files["stdout"],
+					StderrPreview: studentRes.Files["stderr"],
+				}
+
+				switch studentRes.Status {
+				case sandbox.StatusAccepted:
+					// Check interactor status and exit code
+					if interactorRes.Status == sandbox.StatusAccepted && interactorRes.ExitStatus == 0 {
+						tr.Verdict = model.VerdictAccepted
+					} else {
+						tr.Verdict = model.VerdictWrongAnswer
+						tr.StderrPreview = interactorRes.Files["stderr"]
+					}
+				case sandbox.StatusTimeLimitEx:
+					tr.Verdict = model.VerdictTimeLimitEx
+				case sandbox.StatusMemoryLimitEx:
+					tr.Verdict = model.VerdictMemoryLimitEx
+				case sandbox.StatusOutputLimitEx:
+					tr.Verdict = model.VerdictOutputLimitEx
+				case sandbox.StatusNonzeroExit, sandbox.StatusSignalled:
+					tr.Verdict = model.VerdictRuntimeError
+				default:
+					tr.Verdict = model.VerdictInternalError
+				}
+
+				results = append(results, tr)
+				totalCPU += tr.CPUTimeNs
+				if tr.MemoryBytes > peakMem {
+					peakMem = tr.MemoryBytes
+				}
+				if tr.Verdict == model.VerdictAccepted {
+					passed++
+				} else if overallVerdict == model.VerdictAccepted {
+					overallVerdict = tr.Verdict
+				}
+			}
+		} else {
+			cmds := make([]sandbox.Cmd, len(batch))
+			for i, tc := range batch {
+				cmds[i] = sandbox.BuildRunCmdWithOptions(lang, sourceCode, tc.Input, fileID, limits, extraFiles)
+			}
+
+			batchResults, runErr := w.judge.Run(ctx, sandbox.Request{Cmd: cmds})
+			if runErr != nil {
+				return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run (tests %d-%d): %w", batchStart, batchEnd-1, runErr)
+			}
+			if len(batchResults) != len(batch) {
+				return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run: expected %d results, got %d", len(batch), len(batchResults))
+			}
+
+			for i := range batch {
+				r := batchResults[i]
+				testIndex := batchStart + i
+				tc := batch[i]
+				tr := judgeResult(r, testIndex, tc.ExpectedOutput, tc.CheckerType)
+				if tr.Verdict == model.VerdictAccepted && custom != nil {
+					// Run custom checker against input, expected, and actual stdout
+					cVerdict, _ := w.evaluateCustomChecker(ctx, custom, tc.Input, tc.ExpectedOutput, r.Files["stdout"])
+					tr.Verdict = cVerdict
+				}
+				results = append(results, tr)
+				totalCPU += tr.CPUTimeNs
+				if tr.MemoryBytes > peakMem {
+					peakMem = tr.MemoryBytes
+				}
+				if tr.Verdict == model.VerdictAccepted {
+					passed++
+				} else if overallVerdict == model.VerdictAccepted {
+					overallVerdict = tr.Verdict
+				}
+			}
 		}
 
-		batchResults, runErr := w.judge.Run(ctx, sandbox.Request{Cmd: cmds})
-		if runErr != nil {
-			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run (tests %d-%d): %w", batchStart, batchEnd-1, runErr)
-		}
-		if len(batchResults) != len(batch) {
-			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("batch run: expected %d results, got %d", len(batch), len(batchResults))
-		}
-
-		for i, r := range batchResults {
-			testIndex := batchStart + i
-			tr := judgeResult(r, testIndex, batch[i].ExpectedOutput, batch[i].CheckerType)
-			if tr.Verdict == model.VerdictAccepted && custom != nil {
-				// Run custom checker against input, expected, and actual stdout
-				cVerdict, _ := w.evaluateCustomChecker(ctx, custom, batch[i].Input, batch[i].ExpectedOutput, r.Files["stdout"])
-				tr.Verdict = cVerdict
+		if w.pubsub != nil {
+			if err := w.pubsub.PublishEvent(ctx, eventlog.New(jobID, eventlog.EventTestResult, map[string]any{
+				"completed":  batchEnd,
+				"total":      len(tests),
+				"passed":     passed,
+				"batch_from": batchStart,
+				"batch_to":   batchEnd - 1,
+			})); err != nil && log != nil {
+				log.Warn("failed to publish TEST_RESULT event", "err", err)
 			}
-			results = append(results, tr)
-			totalCPU += tr.CPUTimeNs
-			if tr.MemoryBytes > peakMem {
-				peakMem = tr.MemoryBytes
-			}
-			if tr.Verdict == model.VerdictAccepted {
-				passed++
-			} else if overallVerdict == model.VerdictAccepted {
-				overallVerdict = tr.Verdict
-			}
-		}
-
-		if err := w.pubsub.PublishEvent(ctx, eventlog.New(jobID, eventlog.EventTestResult, map[string]any{
-			"completed":  batchEnd,
-			"total":      len(tests),
-			"passed":     passed,
-			"batch_from": batchStart,
-			"batch_to":   batchEnd - 1,
-		})); err != nil {
-			log.Warn("failed to publish TEST_RESULT event", "err", err)
 		}
 	}
 

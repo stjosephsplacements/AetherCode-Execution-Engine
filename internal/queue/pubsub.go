@@ -34,6 +34,8 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"checker", set.Checker,
 			"checker_code", set.CheckerCode,
 			"checker_language", set.CheckerLanguage,
+			"interactor_code", set.InteractorCode,
+			"interactor_language", set.InteractorLanguage,
 		)
 		if len(set.Files) > 0 {
 			if filesJSON, err := json.Marshal(set.Files); err == nil {
@@ -218,13 +220,15 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 
 	// Absent on jobs enqueued before the checker existed: empty means exact.
 	return TestSet{
-		Tests:           tests,
-		Limits:          limits,
-		Checker:         fields["checker"],
-		CheckerCode:     fields["checker_code"],
-		CheckerLanguage: fields["checker_language"],
-		Files:           files,
-		CompilerFlags:   compilerFlags,
+		Tests:              tests,
+		Limits:             limits,
+		Checker:            fields["checker"],
+		CheckerCode:        fields["checker_code"],
+		CheckerLanguage:    fields["checker_language"],
+		InteractorCode:     fields["interactor_code"],
+		InteractorLanguage: fields["interactor_language"],
+		Files:              files,
+		CompilerFlags:      compilerFlags,
 	}, nil
 }
 
@@ -236,11 +240,13 @@ type TestData struct {
 // TestSet is everything a job needs besides its source: the tests,
 // the per-job resource limits and the output checker.
 type TestSet struct {
-	Tests           []TestData
-	Limits          sandbox.RunLimits
-	Checker         string            // empty means exact
-	CheckerCode     string            // optional custom checker source code
-	CheckerLanguage string            // optional custom checker language ("cpp", "python")
-	Files           map[string]string // optional multi-file sources/headers
-	CompilerFlags   []string          // optional whitelisted compiler flags
+	Tests              []TestData
+	Limits             sandbox.RunLimits
+	Checker            string            // empty means exact
+	CheckerCode        string            // optional custom checker source code
+	CheckerLanguage    string            // optional custom checker language ("cpp", "python")
+	InteractorCode     string            // optional interactive interactor source code
+	InteractorLanguage string            // optional interactive interactor language ("cpp", "python")
+	Files              map[string]string // optional multi-file sources/headers
+	CompilerFlags      []string          // optional whitelisted compiler flags
 }
