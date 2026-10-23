@@ -27,6 +27,9 @@ data/
 *.env
 /etc/
 
+# Kubernetes secret values — never commit
+deploy/k8s/.env.secret
+
 # IDE
 .idea/
 .vscode/
@@ -43,3 +46,6 @@ coverage.out
 
 # Compiled Postman collection (generated, not source)
 postman_collection_generated.json
+
+# Superpowers skill docs (local only)
+docs/superpowers/

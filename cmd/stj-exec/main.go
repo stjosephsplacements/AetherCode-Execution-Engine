@@ -117,7 +117,7 @@ func main() {
 		"submit", cfg.SubmitStreamName, "run", cfg.RunStreamName, "bulk", cfg.BulkStreamName,
 		"group", cfg.ConsumerGroup, "submit_weight", cfg.SubmitWeight, "bulk_weight", cfg.BulkWeight)
 
-	pubsub := queue.NewPubSub(rdb)
+	pubsub := queue.NewPubSubWithKey(rdb, cfg.WebhookMasterKey)
 
 	// Workers (dual-consumer weighted fair queuing)
 	var workerWg sync.WaitGroup
@@ -153,9 +153,14 @@ func main() {
 		slog.Info("unauth IP rate limiting enabled", "per_minute", cfg.RateLimitUnauthPerMinute, "burst", cfg.RateLimitUnauthBurst)
 	}
 
+	trustedProxies := gateway.ParseTrustedProxies(cfg.TrustedProxies)
+	if len(trustedProxies) > 0 {
+		slog.Info("trusted proxies configured", "count", len(trustedProxies))
+	}
+
 	// HTTP Gateway
 	mux := http.NewServeMux()
-	h := gateway.NewTieredHandler(pool, submitStream, runStream, bulkStream, pubsub, judge, rdb, rl, unauthRL, cfg.AdmissionMaxQueueDepth, cfg.WorkerCount)
+	h := gateway.NewTieredHandler(pool, submitStream, runStream, bulkStream, pubsub, judge, rdb, rl, unauthRL, cfg.AdmissionMaxQueueDepth, cfg.WorkerCount, trustedProxies)
 	h.Register(mux)
 
 	var handler http.Handler = mux

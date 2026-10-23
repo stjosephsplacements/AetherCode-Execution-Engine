@@ -381,3 +381,112 @@ func TestGetTests_MissingCheckerIsEmpty(t *testing.T) {
 		t.Errorf("Checker = %q, want empty", got.Checker)
 	}
 }
+
+// TestCallbackSecret_EncryptDecryptRoundTrip verifies that PrepareAndEnqueue encrypts
+// the callback_secret and GetTests returns the original plaintext when both use the
+// same master key.
+func TestCallbackSecret_EncryptDecryptRoundTrip(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ctx := context.Background()
+
+	// 32-byte test key (not a real secret)
+	masterKey := make([]byte, 32)
+	for i := range masterKey {
+		masterKey[i] = byte(i + 1)
+	}
+	ps := NewPubSubWithKey(rdb, masterKey)
+
+	secret := "super-secret-hmac-key-12345"
+	set := TestSet{
+		Tests:          []TestData{{Input: "a", ExpectedOutput: "b"}},
+		CallbackURL:    "https://example.com/webhook",
+		CallbackSecret: secret,
+	}
+	evt := eventlog.New("job-enc", eventlog.EventQueued, nil)
+	if err := ps.PrepareAndEnqueue(ctx, "job-enc", set, evt, "ac:stream:enc"); err != nil {
+		t.Fatalf("PrepareAndEnqueue: %v", err)
+	}
+
+	// Verify the raw Redis value is NOT the plaintext secret.
+	raw, err := rdb.HGet(ctx, "ac:tests:job-enc", "callback_secret").Result()
+	if err != nil {
+		t.Fatalf("HGet callback_secret: %v", err)
+	}
+	if raw == secret {
+		t.Error("callback_secret is stored as plaintext in Redis — expected AES-GCM ciphertext")
+	}
+	if len(raw) < 5 || raw[:4] != "enc:" {
+		t.Errorf("stored value does not have enc: prefix: %q", raw)
+	}
+
+	// GetTests must return the original plaintext secret.
+	got, err := ps.GetTests(ctx, "job-enc")
+	if err != nil {
+		t.Fatalf("GetTests: %v", err)
+	}
+	if got.CallbackSecret != secret {
+		t.Errorf("CallbackSecret = %q, want %q", got.CallbackSecret, secret)
+	}
+	if got.CallbackURL != set.CallbackURL {
+		t.Errorf("CallbackURL = %q, want %q", got.CallbackURL, set.CallbackURL)
+	}
+}
+
+// TestCallbackSecret_BackwardsCompatibility verifies that GetTests returns a legacy
+// plaintext secret (written before the master key was configured) unchanged.
+func TestCallbackSecret_BackwardsCompatibility(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ctx := context.Background()
+
+	masterKey := make([]byte, 32)
+	for i := range masterKey {
+		masterKey[i] = byte(i + 7)
+	}
+	ps := NewPubSubWithKey(rdb, masterKey)
+
+	// Simulate a pre-encryption Redis record (no enc: prefix).
+	plaintextSecret := "old-plaintext-secret" //nolint:gosec // G101: test fixture, not a real credential
+	if err := rdb.HSet(ctx, "ac:tests:job-legacy",
+		"count", 1,
+		"0:input", "x", "0:expected", "y",
+		"callback_url", "https://example.com/cb",
+		"callback_secret", plaintextSecret,
+	).Err(); err != nil {
+		t.Fatalf("HSet: %v", err)
+	}
+
+	got, err := ps.GetTests(ctx, "job-legacy")
+	if err != nil {
+		t.Fatalf("GetTests: %v", err)
+	}
+	if got.CallbackSecret != plaintextSecret {
+		t.Errorf("CallbackSecret = %q, want %q (backwards compat)", got.CallbackSecret, plaintextSecret)
+	}
+}
+
+// TestCallbackSecret_NoKeyNoEncryption verifies that when no master key is configured
+// the secret is stored and returned verbatim (no-op / backwards-compat path).
+func TestCallbackSecret_NoKeyNoEncryption(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ctx := context.Background()
+
+	ps := NewPubSub(rdb) // no key
+
+	secret := "plain-secret"
+	set := TestSet{
+		Tests:          []TestData{{Input: "1", ExpectedOutput: "2"}},
+		CallbackSecret: secret,
+	}
+	evt := eventlog.New("job-nokey", eventlog.EventQueued, nil)
+	if err := ps.PrepareAndEnqueue(ctx, "job-nokey", set, evt, "ac:stream:nokey"); err != nil {
+		t.Fatalf("PrepareAndEnqueue: %v", err)
+	}
+
+	got, err := ps.GetTests(ctx, "job-nokey")
+	if err != nil {
+		t.Fatalf("GetTests: %v", err)
+	}
+	if got.CallbackSecret != secret {
+		t.Errorf("CallbackSecret = %q, want %q", got.CallbackSecret, secret)
+	}
+}

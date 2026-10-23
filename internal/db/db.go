@@ -5,12 +5,28 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// buildPool creates a pgxpool from an already-configured *pgxpool.Config,
+// pings it to verify connectivity, and returns the ready pool.
+// connectPrefix and pingPrefix are used verbatim in error messages so callers
+// retain their distinct error strings without duplicating the open/ping pattern.
+func buildPool(ctx context.Context, config *pgxpool.Config, connectPrefix, pingPrefix string) (*pgxpool.Pool, error) {
+	pool, err := pgxpool.NewWithConfig(ctx, config)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", connectPrefix, err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("%s: %w", pingPrefix, err)
+	}
+	return pool, nil
+}
 
 func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
@@ -21,16 +37,7 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	config.MaxConns = 128
 	// Optimize query execution by caching prepared statements and query descriptions
 	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
-
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		return nil, fmt.Errorf("db: connect: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("db: ping: %w", err)
-	}
-	return pool, nil
+	return buildPool(ctx, config, "db: connect", "db: ping")
 }
 
 // ConnectAppRole opens a smaller connection pool using the aethercode_app role URL.
@@ -45,16 +52,7 @@ func ConnectAppRole(ctx context.Context, appURL string) (*pgxpool.Pool, error) {
 	config.MinConns = 4
 	config.MaxConns = 32
 	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
-
-	pool, err := pgxpool.NewWithConfig(ctx, config)
-	if err != nil {
-		return nil, fmt.Errorf("db: app-role connect: %w", err)
-	}
-	if err := pool.Ping(ctx); err != nil {
-		pool.Close()
-		return nil, fmt.Errorf("db: app-role ping: %w", err)
-	}
-	return pool, nil
+	return buildPool(ctx, config, "db: app-role connect", "db: app-role ping")
 }
 
 func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationFS fs.FS) error {
@@ -91,8 +89,8 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationFS fs.FS) error {
 		return fmt.Errorf("db: read migrations dir: %w", err)
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
 	})
 
 	for _, entry := range entries {

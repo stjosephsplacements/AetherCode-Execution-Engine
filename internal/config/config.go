@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"strconv"
@@ -22,6 +23,7 @@ type Config struct {
 
 	// Auth (Zitadel OIDC)
 	AuthEnabled    bool
+	AllowUnauth    bool // AC_ALLOW_UNAUTH: explicit opt-in to disable auth (must be true when AuthEnabled is false)
 	OIDCIssuer     string
 	OIDCJWKSURL    string
 	OIDCAudience   string
@@ -38,6 +40,7 @@ type Config struct {
 	CORSAllowedOrigins string
 
 	// Reverse proxy
+	TrustedProxies []string // AC_TRUSTED_PROXIES: comma-separated CIDRs
 
 	// Fair queuing
 	SubmitStreamName string
@@ -63,6 +66,11 @@ type Config struct {
 	// Sandbox output limits
 	SandboxStdoutMaxBytes int64
 	SandboxStderrMaxBytes int64
+
+	// Webhook security: AES-256-GCM master key used to encrypt callback_secret in Redis.
+	// 32 bytes encoded as 64 hex characters.  Optional: if empty, callback_secret is
+	// stored without encryption (backwards-compatible, but discouraged).
+	WebhookMasterKey []byte
 }
 
 func Load() Config {
@@ -78,7 +86,8 @@ func Load() Config {
 		LogLevel:      env("AC_LOG_LEVEL", "info"),
 		LogFormat:     env("AC_LOG_FORMAT", "json"),
 
-		AuthEnabled:    envBool("AC_AUTH_ENABLED", false),
+		AuthEnabled:    envBool("AC_AUTH_ENABLED", true),
+		AllowUnauth:    envBool("AC_ALLOW_UNAUTH", false),
 		OIDCIssuer:     env("AC_OIDC_ISSUER", "https://sso.example.com"),
 		OIDCJWKSURL:    env("AC_OIDC_JWKS_URL", "http://127.0.0.1:8087/oauth/v2/keys"),
 		OIDCAudience:   env("AC_OIDC_AUDIENCE", ""),
@@ -91,6 +100,8 @@ func Load() Config {
 		AdmissionMaxQueueDepth:   envInt("AC_ADMISSION_MAX_QUEUE_DEPTH", 5000),
 
 		CORSAllowedOrigins: env("AC_CORS_ALLOWED_ORIGINS", ""),
+
+		TrustedProxies: envList("AC_TRUSTED_PROXIES"),
 
 		SubmitStreamName: env("AC_SUBMIT_STREAM", "ac:submissions:submit"),
 		RunStreamName:    env("AC_RUN_STREAM", "ac:submissions:run"),
@@ -109,6 +120,8 @@ func Load() Config {
 
 		SandboxStdoutMaxBytes: envInt64("AC_SANDBOX_STDOUT_MAX_BYTES", 8<<20),
 		SandboxStderrMaxBytes: envInt64("AC_SANDBOX_STDERR_MAX_BYTES", 1<<20),
+
+		WebhookMasterKey: envHex("AC_WEBHOOK_MASTER_KEY", 32),
 	}
 }
 
@@ -134,6 +147,8 @@ func (c Config) Validate() error {
 	check(c.JudgeURL != "", "JudgeURL is required")
 	check(c.JudgeToken != "", "JudgeToken (AC_JUDGE_TOKEN) is required")
 	check(c.JudgeToken != "stj-spike-2024", "JudgeToken must not use the development default value")
+	check(c.JudgeToken != "aethercode-dev-token", "JudgeToken must not use the development default value")
+	check(!strings.Contains(c.DatabaseURL, "aethercode:aethercode@"), "DatabaseURL must not use the hardcoded development credentials")
 	check(c.JobTimeout > 0, "JobTimeout must be > 0")
 	check(c.TestParallelism > 0 && c.TestParallelism <= 64, "TestParallelism must be 1-64")
 	check(c.CompileCacheTTL >= 0, "CompileCacheTTL must be >= 0")
@@ -147,11 +162,17 @@ func (c Config) Validate() error {
 		errs = append(errs, "OIDCAudience (AC_OIDC_AUDIENCE) is required when auth is enabled")
 	}
 
+	if !c.AuthEnabled && !c.AllowUnauth {
+		errs = append(errs, "AC_AUTH_ENABLED=false requires AC_ALLOW_UNAUTH=true to confirm this is intentional")
+	}
 	if !c.AuthEnabled {
 		fmt.Fprintln(os.Stderr, "WARNING: AC_AUTH_ENABLED=false — authentication is disabled")
 	}
 	if c.AuthEnabled && c.DatabaseAppURL == "" {
 		fmt.Fprintln(os.Stderr, "WARNING: AC_DATABASE_APP_URL not set — auth queries run as DB owner, bypassing Row-Level Security")
+	}
+	if len(c.WebhookMasterKey) == 0 {
+		fmt.Fprintln(os.Stderr, "WARNING: AC_WEBHOOK_MASTER_KEY not set — callback_secret will be stored in plaintext in Redis; set a 32-byte hex key to enable AES-256-GCM encryption")
 	}
 
 	if len(errs) > 0 {
@@ -203,6 +224,20 @@ func envBool(key string, fallback bool) bool {
 	return fallback
 }
 
+func envList(key string) []string {
+	if v := os.Getenv(key); v != "" {
+		var out []string
+		for _, s := range strings.Split(v, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	}
+	return nil
+}
+
 func envDuration(key string, fallback time.Duration) time.Duration {
 	if v := os.Getenv(key); v != "" {
 		d, err := time.ParseDuration(v)
@@ -213,4 +248,25 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return d
 	}
 	return fallback
+}
+
+// envHex decodes a hex-encoded byte slice from the environment variable named key.
+// If the variable is absent or empty, nil is returned (caller treats nil as "not set").
+// If the value is present but cannot be decoded, or its decoded length does not equal
+// wantBytes, a warning is printed to stderr and nil is returned.
+func envHex(key string, wantBytes int) []byte {
+	v := os.Getenv(key)
+	if v == "" {
+		return nil
+	}
+	b, err := hex.DecodeString(v)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "config: %s is not valid hex: %v — ignoring\n", key, err)
+		return nil
+	}
+	if len(b) != wantBytes {
+		fmt.Fprintf(os.Stderr, "config: %s must decode to exactly %d bytes (got %d) — ignoring\n", key, wantBytes, len(b))
+		return nil
+	}
+	return b
 }

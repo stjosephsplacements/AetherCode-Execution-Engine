@@ -1,11 +1,10 @@
 package gateway
 
 import (
-	"context"
-	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,10 +13,6 @@ import (
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/metrics"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/requestid"
 )
-
-func RequestID(ctx context.Context) string {
-	return requestid.FromContext(ctx)
-}
 
 type statusWriter struct {
 	http.ResponseWriter
@@ -64,7 +59,7 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 		duration := time.Since(start)
 
 		routeLabel := normalizePath(r.URL.Path)
-		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, routeLabel, fmt.Sprintf("%d", sw.status)).Inc()
+		metrics.HTTPRequestsTotal.WithLabelValues(r.Method, routeLabel, strconv.Itoa(sw.status)).Inc()
 		metrics.HTTPRequestDuration.WithLabelValues(r.Method, routeLabel).Observe(duration.Seconds())
 
 		level := slog.LevelInfo
@@ -86,27 +81,64 @@ func LoggingMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// remoteIP extracts the best-effort client IP for rate limiting.
-// Trusts X-Forwarded-For only to strip the rightmost proxy hop; the result
-// is used as a rate-limit key, not for authentication.
-func remoteIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// X-Forwarded-For: client, proxy1, proxy2 — take the leftmost entry
-		if idx := strings.Index(xff, ","); idx >= 0 {
-			xff = xff[:idx]
+// remoteIP extracts the client IP for rate limiting.
+// XFF/X-Real-Ip are only trusted when the direct peer matches trustedProxies.
+func remoteIP(r *http.Request, trustedProxies []*net.IPNet) string {
+	peerIP := peerAddr(r)
+
+	if len(trustedProxies) > 0 && isTrusted(peerIP, trustedProxies) {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			parts := strings.Split(xff, ",")
+			for i := len(parts) - 1; i >= 0; i-- {
+				ip := strings.TrimSpace(parts[i])
+				if ip == "" {
+					continue
+				}
+				if !isTrusted(net.ParseIP(ip), trustedProxies) {
+					return ip
+				}
+			}
 		}
-		if ip := strings.TrimSpace(xff); ip != "" {
-			return ip
+		if xri := r.Header.Get("X-Real-Ip"); xri != "" {
+			return strings.TrimSpace(xri)
 		}
 	}
-	if xri := r.Header.Get("X-Real-Ip"); xri != "" {
-		return strings.TrimSpace(xri)
-	}
+	return peerIP.String()
+}
+
+func peerAddr(r *http.Request) net.IP {
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return net.ParseIP(r.RemoteAddr)
 	}
-	return host
+	return net.ParseIP(host)
+}
+
+func isTrusted(ip net.IP, nets []*net.IPNet) bool {
+	if ip == nil {
+		return false
+	}
+	for _, n := range nets {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func ParseTrustedProxies(cidrs []string) []*net.IPNet {
+	var nets []*net.IPNet
+	for _, c := range cidrs {
+		if !strings.Contains(c, "/") {
+			c += "/32"
+		}
+		_, n, err := net.ParseCIDR(c)
+		if err != nil {
+			continue
+		}
+		nets = append(nets, n)
+	}
+	return nets
 }
 
 // sanitizeLogValue strips ASCII control characters (including newlines and carriage

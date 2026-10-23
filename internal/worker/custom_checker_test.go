@@ -3,6 +3,7 @@ package worker
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,7 +62,7 @@ func TestCustomChecker_Evaluate(t *testing.T) {
 	ctx := context.Background()
 
 	// 1. Prepare custom checker
-	cc, err := w.prepareCustomChecker(ctx, "cpp", "#include <iostream> ...", nil)
+	cc, err := prepareSandboxProgram(ctx, "checker", "cpp", "#include <iostream> ...", w.cc, w.judge, slog.Default())
 	if err != nil {
 		t.Fatalf("prepareCustomChecker failed: %v", err)
 	}

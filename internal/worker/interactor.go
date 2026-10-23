@@ -1,80 +1,8 @@
 package worker
 
 import (
-	"context"
-	"fmt"
-	"log/slog"
-
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
-
-// interactor holds runtime configuration for an interactive problem interactor.
-type interactor struct {
-	language   string
-	sourceCode string
-	langConfig sandbox.LangConfig
-	fileID     string // for compiled interactors or cached interpreted scripts
-}
-
-// prepareInteractor compiles (if compiled) or caches (if interpreted) the interactor.
-func (w *Worker) prepareInteractor(ctx context.Context, interactorLang, interactorCode string, log *slog.Logger) (*interactor, error) {
-	if interactorLang == "" {
-		interactorLang = "python"
-	}
-	langCfg, ok := sandbox.Languages[interactorLang]
-	if !ok {
-		return nil, fmt.Errorf("unsupported interactor language: %s", interactorLang)
-	}
-
-	it := &interactor{
-		language:   interactorLang,
-		sourceCode: interactorCode,
-		langConfig: langCfg,
-	}
-
-	cacheKey := compileCacheKey("interactor:"+interactorLang, interactorCode)
-	if cachedID, hit := w.cc.get(cacheKey); hit {
-		it.fileID = cachedID
-		log.Debug("interactor cache hit", "lang", interactorLang, "fileID", cachedID)
-		return it, nil
-	}
-
-	if langCfg.Compiled {
-		compileCmd := sandbox.BuildCompileCmd(langCfg, interactorCode)
-		results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{compileCmd}})
-		if err != nil {
-			return nil, fmt.Errorf("compile interactor: %w", err)
-		}
-		if len(results) == 0 || results[0].Status != sandbox.StatusAccepted {
-			stderr := ""
-			if len(results) > 0 {
-				stderr = results[0].Files["stderr"]
-			}
-			return nil, fmt.Errorf("interactor compilation failed: %s", stderr)
-		}
-		for _, fid := range results[0].FileIDs {
-			it.fileID = fid
-			break
-		}
-		if it.fileID != "" {
-			w.cc.put(cacheKey, it.fileID)
-		}
-	} else if !langCfg.StdinIsSource {
-		cacheCmd := sandbox.BuildCacheSourceCmd(langCfg, interactorCode)
-		results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
-		if err == nil && len(results) == 1 && results[0].Status == sandbox.StatusAccepted {
-			for _, fid := range results[0].FileIDs {
-				it.fileID = fid
-				break
-			}
-			if it.fileID != "" {
-				w.cc.put(cacheKey, it.fileID)
-			}
-		}
-	}
-
-	return it, nil
-}
 
 // buildInteractiveCmds constructs the dual Cmd request and pipe mapping for an interactive testcase.
 // Cmd[0]: Student program
@@ -89,7 +17,7 @@ func buildInteractiveCmds(
 	studentFileID string,
 	studentLimits sandbox.RunLimits,
 	extraFiles map[string]string,
-	it *interactor,
+	it *sandboxProgram,
 	inputData string,
 	expectedOutput string,
 ) ([]sandbox.Cmd, []sandbox.PipeMap) {

@@ -10,12 +10,14 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/MicahParks/keyfunc/v3"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/model"
 )
@@ -399,5 +401,97 @@ func TestValidateAndResolve_MissingSub(t *testing.T) {
 	_, err := mw.validateAndResolve(context.Background(), tok)
 	if err == nil {
 		t.Fatal("expected error for missing sub, got nil")
+	}
+}
+
+// newUnreachablePGPool creates a pgxpool that succeeds at construction (lazy
+// connections) but always fails at query time. The pool connects to 127.0.0.1:1
+// which is unreachable, simulating an unknown-org DB lookup failure.
+func newUnreachablePGPool(t *testing.T) *pgxpool.Pool {
+	t.Helper()
+	cfg, err := pgxpool.ParseConfig("postgres://test:test@127.0.0.1:1/test")
+	if err != nil {
+		t.Fatalf("parse pgxpool config: %v", err)
+	}
+	cfg.MinConns = 0
+	cfg.MaxConns = 1
+	cfg.ConnConfig.ConnectTimeout = 100 * time.Millisecond
+	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("create pgxpool: %v", err)
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// TestValidateAndResolve_UnregisteredOrgID guards against the cross-tenant
+// privilege-escalation described in finding F6: a JWT bearing an
+// urn:zitadel:iam:org:id claim that cannot be resolved to a known, active
+// tenant must be rejected with an error rather than silently falling back to
+// DefaultTenantID.
+func TestValidateAndResolve_UnregisteredOrgID(t *testing.T) {
+	const issuer = "https://sso.test"
+	const audience = "myapp"
+	key := genRSAKey(t)
+
+	// Build a middleware backed by a pool that is deliberately unreachable so
+	// that resolveTenant always returns an error (simulating pgx.ErrNoRows or
+	// a connection failure — both must be treated the same way).
+	pool := newUnreachablePGPool(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	k, err := keyfunc.NewJWKSetJSON(rsaJWKSJSON(t, key))
+	if err != nil {
+		t.Fatalf("keyfunc.NewJWKSetJSON: %v", err)
+	}
+	tc, uc := initCaches(ctx)
+	mw := &Middleware{
+		jwks:        k,
+		jwksCancel:  cancel,
+		issuer:      issuer,
+		audience:    audience,
+		pool:        pool,
+		tenantCache: tc,
+		userCache:   uc,
+	}
+
+	// JWT carries a well-formed but unregistered org ID claim.
+	claims := validClaims(issuer, audience, "attacker-sub")
+	claims["urn:zitadel:iam:org:id"] = "unregistered-org-xyz"
+	tok := buildJWT(t, key, claims)
+
+	_, err = mw.validateAndResolve(context.Background(), tok)
+	if err == nil {
+		t.Fatal("expected error for unregistered org ID, got nil — attacker would be provisioned as default-tenant user")
+	}
+	if !strings.Contains(err.Error(), "unknown or inactive organisation") {
+		t.Errorf("error message = %q, want it to contain %q", err.Error(), "unknown or inactive organisation")
+	}
+}
+
+// TestValidateAndResolve_OrglessTokenUsesDefaultTenant verifies that a JWT
+// with NO urn:zitadel:iam:org:id claim still falls through to DefaultTenantID
+// (the legitimate org-less token path must be preserved).
+func TestValidateAndResolve_OrglessTokenUsesDefaultTenant(t *testing.T) {
+	const issuer = "https://sso.test"
+	const audience = "myapp"
+	key := genRSAKey(t)
+	mw := testMiddlewareWithKeyfunc(t, issuer, audience, key)
+
+	// Pre-seed the user cache so resolveUser does not hit a nil DB pool.
+	userID := uuid.New()
+	mw.userCache.set(model.DefaultTenantID.String()+":orgless-sub", userID)
+
+	// JWT has no org claim at all.
+	claims := validClaims(issuer, audience, "orgless-sub")
+	tok := buildJWT(t, key, claims)
+
+	identity, err := mw.validateAndResolve(context.Background(), tok)
+	if err != nil {
+		t.Fatalf("expected success for org-less token, got: %v", err)
+	}
+	if identity.TenantID != model.DefaultTenantID {
+		t.Errorf("TenantID = %v, want DefaultTenantID", identity.TenantID)
 	}
 }

@@ -52,7 +52,7 @@ func ValidateFiles(files map[string]string, maxFiles int, maxTotalBytes int) err
 	totalBytes := 0
 	for name, content := range files {
 		clean := path.Clean(name)
-		if clean == "." || clean == "/" || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") || path.IsAbs(clean) {
+		if clean == "." || clean == "/" || clean == ".." || strings.HasPrefix(clean, "../") || strings.Contains(clean, "/../") || path.IsAbs(clean) {
 			return fmt.Errorf("invalid file path %q", name)
 		}
 		totalBytes += len(content)

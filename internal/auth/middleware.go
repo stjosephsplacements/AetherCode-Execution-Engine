@@ -21,37 +21,29 @@ type Middleware struct {
 	jwksCancel  context.CancelFunc
 	issuer      string
 	audience    string
-	pool        *pgxpool.Pool // owner-role pool used when appPool is nil
-	appPool     *pgxpool.Pool // optional aethercode_app RLS pool for tenant/user resolution
+	pool        *pgxpool.Pool // owner-role pool; used for all bootstrap auth lookups (bypasses RLS)
+	appPool     *pgxpool.Pool // optional aethercode_app RLS pool; reserved for post-auth data queries
 	tenantCache *ttlCache[uuid.UUID]
 	userCache   *ttlCache[uuid.UUID]
-}
-
-// queryPool returns the pool to use for auth queries: the RLS-enforced appPool
-// if configured, otherwise the main owner pool.
-func (m *Middleware) queryPool() *pgxpool.Pool {
-	if m.appPool != nil {
-		return m.appPool
-	}
-	return m.pool
 }
 
 // NewMiddleware creates an OIDC JWT validation middleware.
 // jwksURL should point to the internal JWKS endpoint (e.g. http://127.0.0.1:8087/oauth/v2/keys).
 // The issuer hostname is injected as the Host header for internal requests to Zitadel.
-// appPool is optional: when non-nil, tenant and user lookups use it (connecting as
-// aethercode_app so Row-Level Security policies are enforced). Pass nil to fall
-// back to the main owner pool (existing behaviour, RLS bypassed).
+// appPool is reserved for future use by request handlers that execute tenant-scoped data
+// queries after the identity is already resolved (i.e. after app.tenant_id is known). Auth
+// bootstrap lookups (resolveTenant, resolveUser) always use the owner pool (pool) because
+// those queries must run before the tenant ID is known, so no RLS session variable can be
+// set for them; using the aethercode_app pool without SET LOCAL app.tenant_id would cause
+// RLS policies to filter every row, breaking authentication entirely.
 func NewMiddleware(issuer, jwksURL, audience string, pool *pgxpool.Pool, appPool *pgxpool.Pool) (*Middleware, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 
 	// Extract host from issuer URL to inject as Host header on internal JWKS requests.
 	// Zitadel requires the correct Host header to route to the right instance.
-	issuerHost := issuer
-	if strings.HasPrefix(issuerHost, "https://") {
-		issuerHost = issuerHost[len("https://"):]
-	} else if strings.HasPrefix(issuerHost, "http://") {
-		issuerHost = issuerHost[len("http://"):]
+	issuerHost, ok := strings.CutPrefix(issuer, "https://")
+	if !ok {
+		issuerHost, _ = strings.CutPrefix(issuer, "http://")
 	}
 
 	client := &http.Client{
@@ -146,11 +138,18 @@ func (m *Middleware) validateAndResolve(ctx context.Context, tokenStr string) (*
 	}
 
 	// Resolve Zitadel org to tenant. The org ID claim varies by Zitadel config.
+	// Org-less tokens (no urn:zitadel:iam:org:id claim) are allowed to fall
+	// through to DefaultTenantID. Tokens that DO carry an org claim must resolve
+	// to a known, active tenant — a failure means the org is unregistered,
+	// deactivated, or the DB is unavailable, and the request is rejected as 401
+	// rather than silently downgraded to the default tenant.
 	tenantID := model.DefaultTenantID
 	if orgID := claimString(claims, "urn:zitadel:iam:org:id"); orgID != "" {
-		if tid, err := m.resolveTenant(ctx, orgID); err == nil {
-			tenantID = tid
+		tid, err := m.resolveTenant(ctx, orgID)
+		if err != nil {
+			return nil, fmt.Errorf("unknown or inactive organisation: %w", err)
 		}
+		tenantID = tid
 	}
 
 	userID, err := m.resolveUser(ctx, tenantID, sub, email, name)
@@ -181,7 +180,9 @@ func (m *Middleware) resolveTenant(ctx context.Context, orgID string) (uuid.UUID
 		return id, nil
 	}
 	var id uuid.UUID
-	err := m.queryPool().QueryRow(ctx,
+	// Always use the owner pool: RLS requires app.tenant_id to be set, but the
+	// tenant ID is precisely what this query resolves. The owner role bypasses RLS.
+	err := m.pool.QueryRow(ctx,
 		`SELECT id FROM tenants WHERE slug = $1 AND active = true`, orgID).Scan(&id)
 	if err != nil {
 		return uuid.Nil, err
@@ -196,9 +197,13 @@ func (m *Middleware) resolveUser(ctx context.Context, tenantID uuid.UUID, sub, e
 		return id, nil
 	}
 
+	// Always use the owner pool: these are bootstrap lookups that run before
+	// app.tenant_id can be injected into the session, so the aethercode_app pool
+	// would see every row filtered by RLS and return no rows.
+
 	// Try lookup first (fast path)
 	var id uuid.UUID
-	err := m.queryPool().QueryRow(ctx,
+	err := m.pool.QueryRow(ctx,
 		`SELECT id FROM users WHERE tenant_id = $1 AND external_subject_id = $2`,
 		tenantID, sub).Scan(&id)
 	if err == nil {
@@ -207,7 +212,7 @@ func (m *Middleware) resolveUser(ctx context.Context, tenantID uuid.UUID, sub, e
 	}
 
 	// Auto-provision
-	err = m.queryPool().QueryRow(ctx,
+	err = m.pool.QueryRow(ctx,
 		`INSERT INTO users (tenant_id, external_subject_id, email, display_name)
 		 VALUES ($1, $2, $3, $4)
 		 ON CONFLICT (tenant_id, external_subject_id) DO UPDATE SET email = EXCLUDED.email

@@ -1,10 +1,9 @@
 # go-judge sandbox image with the 7 languages the engine supports:
 # C, C++, Java 21, Go, Python 3, JavaScript (Node), SQLite3.
 #
-# NOTE: the base is a rolling `latest` for simplicity. For reproducible
-# builds, pin a specific go-judge release tag (the engine is validated
-# against go-judge v1.13.0).
-FROM criyle/go-judge:latest AS go-judge
+# Base image pinned to v1.13.0 (the version the engine is validated against).
+# To update: docker pull criyle/go-judge:<new-tag> && docker inspect --format='{{.RepoDigests}}' criyle/go-judge:<new-tag>
+FROM criyle/go-judge:v1.13.0 AS go-judge
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \

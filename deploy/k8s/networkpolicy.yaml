@@ -26,7 +26,7 @@ spec:
           port: 53
         - protocol: TCP
           port: 53
-    # Allow Postgres, Redis, go-judge inside the namespace or cluster
+    # Allow go-judge sandbox
     - to:
         - podSelector:
             matchLabels:
@@ -34,13 +34,29 @@ spec:
       ports:
         - protocol: TCP
           port: 5050
-    # Outbound access for DB, Redis, and OIDC issuer
-    - to: []
+    # PostgreSQL — restrict to the database pod within the namespace
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
       ports:
         - protocol: TCP
           port: 5432
+    # Redis — restrict to the Redis pod within the namespace
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
         - protocol: TCP
           port: 6379
+    # OIDC issuer (port 443) — restrict per-deployment to the IdP's CIDR range.
+    # Default: allow all 443 egress. Operators should replace 0.0.0.0/0 with the
+    # actual IdP IP range once known.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
         - protocol: TCP
           port: 443
 ---

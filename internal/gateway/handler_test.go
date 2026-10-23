@@ -71,7 +71,7 @@ func TestHandleHealth_DegradedWhenDatabaseDown(t *testing.T) {
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
 
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -112,7 +112,7 @@ func TestHandleHealth_ResponseShape(t *testing.T) {
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
 
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 4)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 4, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -148,7 +148,7 @@ func TestHandleHealth_SandboxDown(t *testing.T) {
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
 
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -190,7 +190,7 @@ func TestHandleHealth_QueueDepths(t *testing.T) {
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
 
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/health", nil)
@@ -217,7 +217,7 @@ func TestHandleLanguages(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/languages", nil)
@@ -283,7 +283,7 @@ func TestHandleCancel_NotFound(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/submissions/00000000-0000-0000-0000-000000000001", nil)
@@ -304,7 +304,7 @@ func TestHandleCancel_InvalidID(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/api/v1/submissions/not-a-uuid", nil)
@@ -323,7 +323,7 @@ func TestHandleCancel_EmitsVerdictEvent(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(pool, submitStream, runStream, ps, nil, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, ps, nil, rdb, nil, nil, 5000, 8, nil)
 
 	ctx := context.Background()
 	jobID := uuid.New()
@@ -376,7 +376,7 @@ func TestHandleGetSubmission_InvalidID(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/submissions/not-a-uuid", nil)
@@ -396,7 +396,7 @@ func TestHandleGetSubmission_NotFound(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(pool, submitStream, runStream, nil, judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/submissions/00000000-0000-0000-0000-000000000001", nil)
@@ -415,7 +415,7 @@ func TestHandleExecute_RejectsUnknownChecker(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8, nil)
 
 	body := `{"language":"python","source_code":"print(1)","checker":"regex","tests":[{"input":"","expected_output":"1"}]}`
 	rec := httptest.NewRecorder()
@@ -448,7 +448,7 @@ func assertLegacyRejected(t *testing.T, body string) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := postExecute(h, body)
 	assertExecuteError(t, rec, http.StatusBadRequest, legacyModeError)
@@ -479,7 +479,7 @@ func TestHandleExecute_ModeRunIsNotRejectedAsLegacy(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8, nil)
 
 	// Passes the legacy gate and fails on the next validation step.
 	rec := postExecute(h, `{"language":"python","source_code":"print(1)","mode":"run"}`)
@@ -493,7 +493,7 @@ func TestHandleExecute_RequiresTests(t *testing.T) {
 
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
-	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8)
+	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8, nil)
 
 	rec := postExecute(h, `{"language":"python","source_code":"print(1)"}`)
 	assertExecuteError(t, rec, http.StatusBadRequest, "at least one test is required")
@@ -508,7 +508,7 @@ func TestHandleExecute_PriorityTiers(t *testing.T) {
 	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
 	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
 	bulkStream := queue.NewStream(rdb, "ac:submissions:bulk", "workers")
-	h := NewTieredHandler(pool, submitStream, runStream, bulkStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8)
+	h := NewTieredHandler(pool, submitStream, runStream, bulkStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8, nil)
 
 	// Invalid priority is rejected with 400
 	rec := postExecute(h, `{"language":"python","source_code":"print(1)","priority":"invalid","tests":[{"input":"","expected_output":"1"}]}`)

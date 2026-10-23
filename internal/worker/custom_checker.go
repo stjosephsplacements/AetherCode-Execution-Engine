@@ -11,72 +11,68 @@ import (
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
 
-// customChecker holds runtime configuration for a custom validator/checker.
-type customChecker struct {
+// sandboxProgram holds runtime configuration for a compiled or cached sandbox program
+// (custom checker or interactor). Both have identical fields and preparation logic.
+type sandboxProgram struct {
 	language   string
 	sourceCode string
 	langConfig sandbox.LangConfig
-	fileID     string // for compiled checkers or cached interpreted scripts
+	fileID     string // for compiled programs or cached interpreted scripts
 }
 
-// prepareCustomChecker compiles (if compiled) or caches (if interpreted) the custom checker code.
-func (w *Worker) prepareCustomChecker(ctx context.Context, checkerLang, checkerCode string, log *slog.Logger) (*customChecker, error) {
-	if checkerLang == "" {
-		checkerLang = "python"
+// prepareSandboxProgram compiles (if compiled) or caches (if interpreted) a sandbox program.
+// kind is used as a cache-key prefix and in error messages ("checker" or "interactor").
+func prepareSandboxProgram(ctx context.Context, kind, lang, code string, cc *compileCache, judge *sandbox.Client, log *slog.Logger) (*sandboxProgram, error) {
+	if lang == "" {
+		lang = "python"
 	}
-	langCfg, ok := sandbox.Languages[checkerLang]
+	langCfg, ok := sandbox.Languages[lang]
 	if !ok {
-		return nil, fmt.Errorf("unsupported checker language: %s", checkerLang)
+		return nil, fmt.Errorf("unsupported %s language: %s", kind, lang)
 	}
 
-	cc := &customChecker{
-		language:   checkerLang,
-		sourceCode: checkerCode,
+	sp := &sandboxProgram{
+		language:   lang,
+		sourceCode: code,
 		langConfig: langCfg,
 	}
 
-	cacheKey := compileCacheKey("checker:"+checkerLang, checkerCode)
-	if cachedID, hit := w.cc.get(cacheKey); hit {
-		cc.fileID = cachedID
-		log.Debug("custom checker cache hit", "lang", checkerLang, "fileID", cachedID)
-		return cc, nil
+	cacheKey := compileCacheKey(kind+":"+lang, code)
+	if cachedID, hit := cc.get(cacheKey); hit {
+		sp.fileID = cachedID
+		log.Debug(kind+" cache hit", "lang", lang, "fileID", cachedID)
+		return sp, nil
 	}
 
 	if langCfg.Compiled {
-		compileCmd := sandbox.BuildCompileCmd(langCfg, checkerCode)
-		results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{compileCmd}})
+		compileCmd := sandbox.BuildCompileCmd(langCfg, code)
+		results, err := judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{compileCmd}})
 		if err != nil {
-			return nil, fmt.Errorf("compile checker: %w", err)
+			return nil, fmt.Errorf("compile %s: %w", kind, err)
 		}
 		if len(results) == 0 || results[0].Status != sandbox.StatusAccepted {
 			stderr := ""
 			if len(results) > 0 {
 				stderr = results[0].Files["stderr"]
 			}
-			return nil, fmt.Errorf("checker compilation failed: %s", stderr)
+			return nil, fmt.Errorf("%s compilation failed: %s", kind, stderr)
 		}
-		for _, fid := range results[0].FileIDs {
-			cc.fileID = fid
-			break
-		}
-		if cc.fileID != "" {
-			w.cc.put(cacheKey, cc.fileID)
+		sp.fileID = firstFileID(results[0].FileIDs)
+		if sp.fileID != "" {
+			cc.put(cacheKey, sp.fileID)
 		}
 	} else if !langCfg.StdinIsSource {
-		cacheCmd := sandbox.BuildCacheSourceCmd(langCfg, checkerCode)
-		results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
+		cacheCmd := sandbox.BuildCacheSourceCmd(langCfg, code)
+		results, err := judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cacheCmd}})
 		if err == nil && len(results) == 1 && results[0].Status == sandbox.StatusAccepted {
-			for _, fid := range results[0].FileIDs {
-				cc.fileID = fid
-				break
-			}
-			if cc.fileID != "" {
-				w.cc.put(cacheKey, cc.fileID)
+			sp.fileID = firstFileID(results[0].FileIDs)
+			if sp.fileID != "" {
+				cc.put(cacheKey, sp.fileID)
 			}
 		}
 	}
 
-	return cc, nil
+	return sp, nil
 }
 
 // buildCheckerCmd constructs the sandbox execution command for the custom checker.
@@ -90,7 +86,7 @@ func (w *Worker) prepareCustomChecker(ctx context.Context, checkerLang, checkerC
 // Exit code 0 indicates Accepted.
 // Exit code 1 (or other non-zero) indicates Wrong Answer.
 // Crash/Timeout indicates Judge Error / Internal Error.
-func (c *customChecker) buildCheckerCmd(input, expectedOutput, actualStdout string) sandbox.Cmd {
+func (c *sandboxProgram) buildCheckerCmd(input, expectedOutput, actualStdout string) sandbox.Cmd {
 	cpuLimit := uint64(5_000_000_000) // 5 seconds CPU cap for custom checker
 	clockLimit := sandbox.ClockLimit(cpuLimit)
 	memLimit := uint64(512 << 20) // 512MB memory
@@ -128,7 +124,7 @@ func (c *customChecker) buildCheckerCmd(input, expectedOutput, actualStdout stri
 }
 
 // evaluateCustomChecker executes the checker and interprets its exit status.
-func (w *Worker) evaluateCustomChecker(ctx context.Context, cc *customChecker, input, expected, actual string) (model.Verdict, string) {
+func (w *Worker) evaluateCustomChecker(ctx context.Context, cc *sandboxProgram, input, expected, actual string) (model.Verdict, string) {
 	evalCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
