@@ -1,0 +1,60 @@
+name: issue-stale-assignment-reclaimer
+
+# Reclaims issues that were assigned but have had no activity (no PR opened, no comments) for 7 days.
+# Unassigns the contributor and marks the issue open for others on an FCFS basis.
+# Maintainers are exempt from auto-reclaiming.
+
+on:
+  schedule:
+    - cron: "0 4 * * *" # Daily at 04:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  reclaim:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Reclaim inactive issue assignments
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+
+          # Fetch all open assigned issues
+          ISSUES=$(gh issue list --repo "$REPO" --state open --json number,assignees,updatedAt --jq '.[] | select((.assignees | length) > 0)')
+
+          NOW_EPOCH=$(date +%s)
+          INACTIVITY_LIMIT_SECONDS=$((7 * 24 * 60 * 60)) # 7 days
+
+          echo "$ISSUES" | jq -c '.' | while IFS= read -r item; do
+            [ -z "$item" ] && continue
+
+            NUM=$(echo "$item" | jq -r '.number')
+            UPDATED_AT=$(echo "$item" | jq -r '.updatedAt')
+            UPDATED_EPOCH=$(date -d "$UPDATED_AT" +%s 2>/dev/null || date -jf "%Y-%m-%dT%H:%M:%SZ" "$UPDATED_AT" +%s 2>/dev/null || echo 0)
+
+            DIFF=$((NOW_EPOCH - UPDATED_EPOCH))
+            if [ "$DIFF" -gt "$INACTIVITY_LIMIT_SECONDS" ]; then
+              ASSIGNEE=$(echo "$item" | jq -r '.assignees[0].login')
+
+              # Check if assignee is maintainer
+              PERM=$(gh api "repos/${REPO}/collaborators/${ASSIGNEE}/permission" --jq '.permission' 2>/dev/null || echo "none")
+              if [[ "$PERM" == "admin" || "$PERM" == "write" || "$PERM" == "maintain" ]]; then
+                echo "Issue #${NUM}: Assignee ${ASSIGNEE} is a maintainer — skipping."
+                continue
+              fi
+
+              echo "Reclaiming issue #${NUM} from @${ASSIGNEE} due to 7 days of inactivity..."
+              gh api -X DELETE "repos/${REPO}/issues/${NUM}/assignees" -f "assignees[]=${ASSIGNEE}"
+              gh issue comment "$NUM" --repo "$REPO" --body "$(cat <<EOF
+⏰ **Notice**: This issue was automatically unassigned from @${ASSIGNEE} due to 7 days of inactivity.
+
+It is now reopened for anyone in the community to claim on a First-Come, First-Served basis with \`/assign\`.
+EOF
+)"
+            fi
+          done

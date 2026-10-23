@@ -1,0 +1,70 @@
+name: pr-merge-conflict-notifier
+
+# Detects merge conflicts on open PRs when the base branch is updated.
+# Automatically labels the PR with 'needs-rebase' and alerts the author.
+# Removes the label once conflicts are resolved.
+
+on:
+  push:
+    branches:
+      - development
+      - production
+  pull_request_target:
+    types: [synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  check-conflicts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Check mergeable status of open PRs
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+
+          # Ensure the label exists
+          gh label create "needs-rebase" --repo "$REPO" --color "e11d48" --description "PR has merge conflicts with base branch" 2>/dev/null || true
+
+          # If triggered by a push to development, inspect all open PRs targeting development
+          if [ "${{ github.event_name }}" = "push" ]; then
+            PRS=$(gh pr list --repo "$REPO" --base "${{ github.ref_name }}" --state open --json number,mergeable,labels)
+          else
+            PRS=$(gh pr view "${{ github.event.pull_request.number }}" --repo "$REPO" --json number,mergeable,labels | jq -c '[.]')
+          fi
+
+          echo "$PRS" | jq -c '.[]' | while IFS= read -r pr; do
+            [ -z "$pr" ] && continue
+            PR_NUM=$(echo "$pr" | jq -r '.number')
+            MERGEABLE=$(echo "$pr" | jq -r '.mergeable')
+            HAS_LABEL=$(echo "$pr" | jq -r '[.labels[].name] | contains(["needs-rebase"])')
+
+            # GitHub API returns "CONFLICTING" when conflicts exist
+            if [ "$MERGEABLE" = "CONFLICTING" ]; then
+              if [ "$HAS_LABEL" != "true" ]; then
+                echo "PR #${PR_NUM} has merge conflicts. Adding needs-rebase label..."
+                gh pr edit "$PR_NUM" --repo "$REPO" --add-label "needs-rebase" 2>/dev/null || true
+                gh pr comment "$PR_NUM" --repo "$REPO" --body "$(cat <<EOF
+⚠️ **Merge Conflict Detected**: This pull request has conflicts with the base branch (\`${{ github.ref_name }}\`).
+
+Please rebase or merge the latest changes from the base branch to resolve conflicts:
+\`\`\`bash
+git fetch origin
+git rebase origin/${{ github.ref_name }}
+# Resolve conflicts and force-push
+git push --force-with-lease
+\`\`\`
+EOF
+)"
+              fi
+            elif [ "$MERGEABLE" = "MERGEABLE" ]; then
+              if [ "$HAS_LABEL" = "true" ]; then
+                echo "PR #${PR_NUM} conflicts resolved. Removing needs-rebase label..."
+                gh pr edit "$PR_NUM" --repo "$REPO" --remove-label "needs-rebase" 2>/dev/null || true
+              fi
+            fi
+          done

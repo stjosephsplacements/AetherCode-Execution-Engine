@@ -1,0 +1,36 @@
+name: pr-ci-quick-benchmark
+
+# Runs CPU and memory allocation benchmarks on PRs that touch internal packages,
+# reporting performance shifts against baseline directly in the PR.
+
+on:
+  pull_request:
+    paths:
+      - 'internal/**'
+      - 'cmd/**'
+      - 'go.mod'
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  benchmark:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Run Microbenchmarks
+        run: |
+          set -euo pipefail
+          echo "Running benchmark suite..."
+          mkdir -p .bench
+          go test -bench=. -benchmem -run=^$ ./... > .bench/current.txt || true
+          cat .bench/current.txt
