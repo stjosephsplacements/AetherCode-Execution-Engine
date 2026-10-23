@@ -32,6 +32,8 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"cpu_ns", set.Limits.CPU,
 			"mem_bytes", set.Limits.Memory,
 			"checker", set.Checker,
+			"checker_code", set.CheckerCode,
+			"checker_language", set.CheckerLanguage,
 		)
 		for i, t := range set.Tests {
 			prefix := strconv.Itoa(i)
@@ -196,7 +198,13 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 		limits.Memory, _ = strconv.ParseUint(v, 10, 64)
 	}
 	// Absent on jobs enqueued before the checker existed: empty means exact.
-	return TestSet{Tests: tests, Limits: limits, Checker: fields["checker"]}, nil
+	return TestSet{
+		Tests:           tests,
+		Limits:          limits,
+		Checker:         fields["checker"],
+		CheckerCode:     fields["checker_code"],
+		CheckerLanguage: fields["checker_language"],
+	}, nil
 }
 
 type TestData struct {
@@ -207,7 +215,9 @@ type TestData struct {
 // TestSet is everything a job needs besides its source: the tests,
 // the per-job resource limits and the output checker.
 type TestSet struct {
-	Tests   []TestData
-	Limits  sandbox.RunLimits
-	Checker string // empty means exact
+	Tests           []TestData
+	Limits          sandbox.RunLimits
+	Checker         string // empty means exact
+	CheckerCode     string // optional custom checker source code
+	CheckerLanguage string // optional custom checker language ("cpp", "python")
 }

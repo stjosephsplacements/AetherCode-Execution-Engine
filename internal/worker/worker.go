@@ -95,9 +95,11 @@ func (w *Worker) runWorker(ctx context.Context, consumer string) (panicked bool)
 }
 
 type testData struct {
-	Input          string
-	ExpectedOutput string
-	CheckerType    string // "exact" | "token" | "float"; empty means exact
+	Input           string
+	ExpectedOutput  string
+	CheckerType     string // "exact" | "token" | "float" | "custom"; empty means exact
+	CheckerCode     string
+	CheckerLanguage string
 }
 
 func (w *Worker) process(ctx context.Context, submissionID string) error {
@@ -294,9 +296,11 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandb
 	tests := make([]testData, len(set.Tests))
 	for i, rt := range set.Tests {
 		tests[i] = testData{
-			Input:          rt.Input,
-			ExpectedOutput: rt.ExpectedOutput,
-			CheckerType:    set.Checker,
+			Input:           rt.Input,
+			ExpectedOutput:  rt.ExpectedOutput,
+			CheckerType:     set.Checker,
+			CheckerCode:     set.CheckerCode,
+			CheckerLanguage: set.CheckerLanguage,
 		}
 	}
 	return tests, set.Limits, nil
@@ -376,6 +380,16 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 		// Non-fatal: falls back to inlining source in each Cmd
 	}
 
+	// If custom checker is requested, prepare it (compile/cache) before running tests.
+	var custom *customChecker
+	if len(tests) > 0 && tests[0].CheckerType == "custom" && tests[0].CheckerCode != "" {
+		c, err := w.prepareCustomChecker(ctx, tests[0].CheckerLanguage, tests[0].CheckerCode, log)
+		if err != nil {
+			return nil, 0, 0, 0, model.VerdictInternalError, fmt.Errorf("custom checker setup: %w", err)
+		}
+		custom = c
+	}
+
 	for batchStart := 0; batchStart < len(tests); batchStart += maxBatchSize {
 		if ctx.Err() != nil {
 			log.Warn("job context expired, skipping remaining tests", "completed", batchStart, "total", len(tests))
@@ -407,6 +421,11 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 		for i, r := range batchResults {
 			testIndex := batchStart + i
 			tr := judgeResult(r, testIndex, batch[i].ExpectedOutput, batch[i].CheckerType)
+			if tr.Verdict == model.VerdictAccepted && custom != nil {
+				// Run custom checker against input, expected, and actual stdout
+				cVerdict, _ := w.evaluateCustomChecker(ctx, custom, batch[i].Input, batch[i].ExpectedOutput, r.Files["stdout"])
+				tr.Verdict = cVerdict
+			}
 			results = append(results, tr)
 			totalCPU += tr.CPUTimeNs
 			if tr.MemoryBytes > peakMem {
