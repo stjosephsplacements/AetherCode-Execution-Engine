@@ -377,6 +377,18 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 					"msg_id", msg.ID, "delivery_count", deliveryCounts[msg.ID])
 				metrics.PoisonMessagesTotal.Inc()
 				ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
+				dc.rdb.XAdd(ackCtx, &redis.XAddArgs{
+					Stream: "ac:dlq:poison",
+					MaxLen: 10_000,
+					Approx: true,
+					Values: map[string]interface{}{
+						"submission_id":  subID,
+						"source_stream":  stream,
+						"orig_msg_id":    msg.ID,
+						"delivery_count": deliveryCounts[msg.ID],
+						"reclaimed_at":   time.Now().UTC().Format(time.RFC3339),
+					},
+				})
 				dc.rdb.XAck(ackCtx, stream, dc.group, msg.ID)
 				ackCancel()
 				continue
