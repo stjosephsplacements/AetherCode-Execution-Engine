@@ -51,29 +51,30 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	lastEventID := r.Header.Get("Last-Event-ID")
 
-	// Ownership check: fetch submission and verify caller identity.
+	// Ownership check:
 	identity, hasAuth := auth.GetIdentity(ctx)
-	ownerCheckCtx, ownerCheckCancel := context.WithTimeout(context.Background(), 3*time.Second)
-	sub, err := db.GetSubmission(ownerCheckCtx, h.pool, parsedJobID)
-	ownerCheckCancel()
-	if err != nil {
-		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
-		return
-	}
-	if hasAuth {
-		if sub.TenantID != identity.TenantID || (sub.UserID == nil || *sub.UserID != identity.UserID) {
-			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
-			return
-		}
-	} else {
-		// Unauthenticated callers must present the stream_token issued at job creation.
-		// This prevents UUIDv7-based enumeration of other users' streams.
+	if !hasAuth {
+		// Fast path for unauthenticated callers: verify the stream_token in Redis
+		// first without doing a heavy DB round trip.
 		streamToken := r.URL.Query().Get("stream_token")
 		tokenCtx, tokenCancel := context.WithTimeout(context.Background(), 2*time.Second)
 		valid := verifyStreamToken(tokenCtx, h.rdb, safeJobID, streamToken)
 		tokenCancel()
 		if !valid {
 			http.Error(w, `{"error":"invalid or missing stream_token"}`, http.StatusUnauthorized)
+			return
+		}
+	} else {
+		// Authenticated callers: verify submission ownership in DB.
+		ownerCheckCtx, ownerCheckCancel := context.WithTimeout(context.Background(), 3*time.Second)
+		sub, err := db.GetSubmission(ownerCheckCtx, h.pool, parsedJobID)
+		ownerCheckCancel()
+		if err != nil {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+			return
+		}
+		if sub.TenantID != identity.TenantID || (sub.UserID == nil || *sub.UserID != identity.UserID) {
+			http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
 			return
 		}
 	}

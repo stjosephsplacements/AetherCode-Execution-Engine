@@ -8,10 +8,17 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/requestid"
 )
+
+var bufPool = sync.Pool{
+	New: func() any {
+		return new(bytes.Buffer)
+	},
+}
 
 type Client struct {
 	baseURL    string
@@ -26,8 +33,8 @@ func NewClient(baseURL, authToken string) *Client {
 		httpClient: &http.Client{
 			Timeout: 0, // per-request context.WithTimeout controls deadline
 			Transport: &http.Transport{
-				MaxIdleConns:          128,
-				MaxIdleConnsPerHost:   128,
+				MaxIdleConns:          256,
+				MaxIdleConnsPerHost:   256,
 				IdleConnTimeout:       90 * time.Second,
 				ResponseHeaderTimeout: 0, // batched /run calls vary in duration; context deadline governs
 				DisableCompression:    true,
@@ -43,12 +50,15 @@ func NewClient(baseURL, authToken string) *Client {
 // Run sends a batch of commands to go-judge and returns the results.
 // The response is a bare JSON array — one Result per Cmd.
 func (c *Client) Run(ctx context.Context, req Request) ([]Result, error) {
-	body, err := json.Marshal(req)
-	if err != nil {
+	buf := bufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer bufPool.Put(buf)
+
+	if err := json.NewEncoder(buf).Encode(req); err != nil {
 		return nil, fmt.Errorf("sandbox: marshal request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/run", bytes.NewReader(body))
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+"/run", bytes.NewReader(buf.Bytes()))
 	if err != nil {
 		return nil, fmt.Errorf("sandbox: create request: %w", err)
 	}

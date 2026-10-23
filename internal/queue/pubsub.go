@@ -26,12 +26,18 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 
 	if len(set.Tests) > 0 {
 		key := "ac:tests:" + jobID
-		pipe.HSet(ctx, key, "count", len(set.Tests), "cpu_ns", set.Limits.CPU, "mem_bytes", set.Limits.Memory, "checker", set.Checker)
+		fields := make([]any, 0, 10+2*len(set.Tests))
+		fields = append(fields,
+			"count", len(set.Tests),
+			"cpu_ns", set.Limits.CPU,
+			"mem_bytes", set.Limits.Memory,
+			"checker", set.Checker,
+		)
 		for i, t := range set.Tests {
 			prefix := strconv.Itoa(i)
-			pipe.HSet(ctx, key, prefix+":input", t.Input)
-			pipe.HSet(ctx, key, prefix+":expected", t.ExpectedOutput)
+			fields = append(fields, prefix+":input", t.Input, prefix+":expected", t.ExpectedOutput)
 		}
+		pipe.HSet(ctx, key, fields...)
 		pipe.Expire(ctx, key, testDataTTL)
 	}
 
