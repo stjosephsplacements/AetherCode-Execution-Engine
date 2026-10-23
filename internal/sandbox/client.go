@@ -131,7 +131,20 @@ func (c *Client) Version(ctx context.Context) (string, error) {
 // --- Request/Response types matching go-judge REST API ---
 
 type Request struct {
-	Cmd []Cmd `json:"cmd"`
+	Cmd         []Cmd     `json:"cmd"`
+	PipeMapping []PipeMap `json:"pipeMapping,omitempty"`
+}
+
+type PipeIndex struct {
+	Index int `json:"index"`
+	Fd    int `json:"fd"`
+}
+
+type PipeMap struct {
+	In    PipeIndex `json:"in"`
+	Out   PipeIndex `json:"out"`
+	Proxy bool      `json:"proxy,omitempty"`
+	Name  string    `json:"name,omitempty"`
 }
 
 type Cmd struct {

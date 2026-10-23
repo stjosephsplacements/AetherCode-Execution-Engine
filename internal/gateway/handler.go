@@ -125,6 +125,9 @@ type executeRequest struct {
 	// Optional custom checker source code and language (e.g. "python", "cpp").
 	CheckerCode     string `json:"checker_code,omitempty"`
 	CheckerLanguage string `json:"checker_language,omitempty"`
+	// Optional interactive interactor source code and language for interactive problems.
+	InteractorCode     string `json:"interactor_code,omitempty"`
+	InteractorLanguage string `json:"interactor_language,omitempty"`
 	// Optional multi-file submission map: {"helper.h": "...", "solution.cpp": "..."}
 	Files map[string]string `json:"files,omitempty"`
 	// Optional whitelisted compiler flags: ["-O3", "-std=c++20"]
@@ -234,6 +237,19 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Checker = "custom"
+	}
+	if req.InteractorCode != "" {
+		if len(req.InteractorCode) > maxSourceSize {
+			jsonError(w, "interactor_code exceeds 64KB", http.StatusBadRequest)
+			return
+		}
+		if req.InteractorLanguage == "" {
+			req.InteractorLanguage = "python"
+		}
+		if _, ok := sandbox.Languages[req.InteractorLanguage]; !ok {
+			jsonError(w, "unsupported interactor_language", http.StatusBadRequest)
+			return
+		}
 	}
 	if len(req.Files) > 0 {
 		if err := sandbox.ValidateFiles(req.Files, 10, 128<<10); err != nil {
@@ -373,13 +389,15 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 
 	queuedEvt := eventlog.New(jobID.String(), eventlog.EventQueued, nil)
 	testSet := queue.TestSet{
-		Tests:           tests,
-		Limits:          limits,
-		Checker:         req.Checker,
-		CheckerCode:     req.CheckerCode,
-		CheckerLanguage: req.CheckerLanguage,
-		Files:           req.Files,
-		CompilerFlags:   req.CompilerFlags,
+		Tests:              tests,
+		Limits:             limits,
+		Checker:            req.Checker,
+		CheckerCode:        req.CheckerCode,
+		CheckerLanguage:    req.CheckerLanguage,
+		InteractorCode:     req.InteractorCode,
+		InteractorLanguage: req.InteractorLanguage,
+		Files:              req.Files,
+		CompilerFlags:      req.CompilerFlags,
 	}
 	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), testSet, queuedEvt, targetStream.StreamName()); err != nil {
 		slog.Error("enqueue failed", "submission_id", jobID, "err", err)
