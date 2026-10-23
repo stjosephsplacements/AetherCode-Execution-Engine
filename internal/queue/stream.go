@@ -423,7 +423,7 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 					"msg_id", msg.ID, "delivery_count", deliveryCounts[msg.ID])
 				metrics.PoisonMessagesTotal.Inc()
 				dlqCtx, dlqCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-				dc.rdb.XAdd(dlqCtx, &redis.XAddArgs{
+				dlqErr := dc.rdb.XAdd(dlqCtx, &redis.XAddArgs{
 					Stream: "ac:dlq:poison",
 					MaxLen: 10_000,
 					Approx: true,
@@ -434,8 +434,13 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 						"delivery_count": deliveryCounts[msg.ID],
 						"reclaimed_at":   time.Now().UTC().Format(time.RFC3339),
 					},
-				})
+				}).Err()
 				dlqCancel()
+				if dlqErr != nil {
+					slog.Error("reclaimer: failed to write poison message to DLQ, leaving unacknowledged for retry",
+						"stream", stream, "submission_id", subID, "msg_id", msg.ID, "err", dlqErr)
+					continue
+				}
 				dc.ack(ctx, stream, msg.ID)
 				continue
 			}

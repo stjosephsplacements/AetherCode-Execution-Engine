@@ -19,9 +19,13 @@ import (
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
 
-// encryptSecret encrypts plaintext with AES-256-GCM and returns a base64-encoded
-// nonce||ciphertext||tag blob.  The base64 prefix "enc:" lets GetTests distinguish
-// encrypted values from legacy plaintext ones written before the key was configured.
+// encSentinel is the marker prepended to AES-GCM ciphertexts stored in Redis.
+// The NUL byte (0x00) is never valid base64, so a plaintext value that starts
+// with "enc:" is never misidentified as encrypted.
+const encSentinel = "enc:\x00"
+
+// encryptSecret encrypts plaintext with AES-256-GCM and returns a sentinel-prefixed
+// base64-encoded nonce||ciphertext||tag blob.
 func encryptSecret(key []byte, plaintext string) (string, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -36,19 +40,18 @@ func encryptSecret(key []byte, plaintext string) (string, error) {
 		return "", fmt.Errorf("pubsub: nonce: %w", err)
 	}
 	ct := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
-	return "enc:" + base64.StdEncoding.EncodeToString(ct), nil
+	return encSentinel + base64.StdEncoding.EncodeToString(ct), nil
 }
 
-// decryptSecret reverses encryptSecret.  If the value does not carry the "enc:" prefix
+// decryptSecret reverses encryptSecret.  If the value does not carry the encSentinel
 // it is returned as-is (backwards-compatible with plaintext values written before the
 // key was configured).
 func decryptSecret(key []byte, stored string) (string, error) {
-	const prefix = "enc:"
-	if len(stored) < len(prefix) || stored[:len(prefix)] != prefix {
+	if len(stored) < len(encSentinel) || stored[:len(encSentinel)] != encSentinel {
 		// Legacy plaintext: return unchanged.
 		return stored, nil
 	}
-	raw, err := base64.StdEncoding.DecodeString(stored[len(prefix):])
+	raw, err := base64.StdEncoding.DecodeString(stored[len(encSentinel):])
 	if err != nil {
 		return "", fmt.Errorf("pubsub: base64 decode secret: %w", err)
 	}
@@ -294,12 +297,20 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 	}
 
 	callbackSecret := fields["callback_secret"]
-	if callbackSecret != "" && len(p.webhookMasterKey) > 0 {
-		decrypted, decErr := decryptSecret(p.webhookMasterKey, callbackSecret)
-		if decErr != nil {
-			return TestSet{}, fmt.Errorf("pubsub: decrypt callback_secret: %w", decErr)
+	if callbackSecret != "" {
+		if len(callbackSecret) >= len(encSentinel) && callbackSecret[:len(encSentinel)] == encSentinel {
+			if len(p.webhookMasterKey) == 0 {
+				return TestSet{}, fmt.Errorf("pubsub: callback_secret is encrypted but AC_WEBHOOK_MASTER_KEY is not configured")
+			}
+			decrypted, decErr := decryptSecret(p.webhookMasterKey, callbackSecret)
+			if decErr != nil {
+				return TestSet{}, fmt.Errorf("pubsub: decrypt callback_secret: %w", decErr)
+			}
+			callbackSecret = decrypted
+		} else if len(p.webhookMasterKey) > 0 {
+			// Plaintext legacy value — pass through unchanged.
+			_ = callbackSecret
 		}
-		callbackSecret = decrypted
 	}
 
 	// Absent on jobs enqueued before the checker existed: empty means exact.
