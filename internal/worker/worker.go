@@ -442,8 +442,8 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 
 				tr := model.TestResult{
 					TestIndex:     testIndex,
-					CPUTimeNs:     int64(studentRes.Time),
-					MemoryBytes:   int64(studentRes.Memory),
+					CPUTimeNs:     int64(studentRes.Time),   //nolint:gosec // go-judge reports CPU time in ns
+					MemoryBytes:   int64(studentRes.Memory), //nolint:gosec // go-judge reports memory in bytes
 					StdoutPreview: studentRes.Files["stdout"],
 					StderrPreview: studentRes.Files["stderr"],
 				}
@@ -496,10 +496,11 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 
 			for i, r := range batchResults {
 				testIndex := batchStart + i
-				tr := judgeResult(r, testIndex, batch[i].ExpectedOutput, batch[i].CheckerType)
+				tc := batch[i]
+				tr := judgeResult(r, testIndex, tc.ExpectedOutput, tc.CheckerType)
 				if tr.Verdict == model.VerdictAccepted && custom != nil {
 					// Run custom checker against input, expected, and actual stdout
-					cVerdict, _ := w.evaluateCustomChecker(ctx, custom, batch[i].Input, batch[i].ExpectedOutput, r.Files["stdout"])
+					cVerdict, _ := w.evaluateCustomChecker(ctx, custom, tc.Input, tc.ExpectedOutput, r.Files["stdout"])
 					tr.Verdict = cVerdict
 				}
 				results = append(results, tr)
