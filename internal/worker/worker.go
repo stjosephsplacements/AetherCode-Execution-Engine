@@ -161,7 +161,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	}()
 
 	// Load the job's tests and limits from Redis
-	tests, limits, err := w.loadTests(jobCtx, submissionID)
+	tests, limits, extraFiles, compilerFlags, err := w.loadTests(jobCtx, submissionID)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("load tests: %v", err), log)
 	}
@@ -197,14 +197,14 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 			log.Warn("failed to publish COMPILING event", "err", err)
 		}
 
-		cacheKey := compileCacheKey(sub.Language, sub.SourceCode)
+		cacheKey := compileCacheKeyWithOptions(sub.Language, sub.SourceCode, extraFiles, compilerFlags)
 		if cached, hit := w.cc.get(cacheKey); hit {
 			fileID = cached
 			metrics.CompileCacheHitsTotal.Inc()
 			log.Info("compile cache hit", "fileId", fileID)
 		} else {
 			compileStart := time.Now()
-			compileResult, err := w.compile(jobCtx, lang, sub.SourceCode)
+			compileResult, err := w.compileWithOptions(jobCtx, lang, sub.SourceCode, extraFiles, compilerFlags)
 			metrics.CompileDuration.WithLabelValues(sub.Language).Observe(time.Since(compileStart).Seconds())
 			if err != nil {
 				return w.failSubmission(jobCtx, id, model.VerdictInternalError, err.Error(), log)
@@ -244,7 +244,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		log.Warn("failed to publish RUNNING event", "err", err)
 	}
 
-	results, totalCPU, peakMem, passed, overallVerdict, err := w.runTestsBatched(jobCtx, submissionID, lang, sub.SourceCode, tests, fileID, limits, log)
+	results, totalCPU, peakMem, passed, overallVerdict, err := w.runTestsBatched(jobCtx, submissionID, lang, sub.SourceCode, tests, fileID, limits, extraFiles, log)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("batch run: %v", err), log)
 	}
@@ -288,10 +288,10 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	return nil
 }
 
-func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandbox.RunLimits, error) {
+func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandbox.RunLimits, map[string]string, []string, error) {
 	set, err := w.pubsub.GetTests(ctx, jobID)
 	if err != nil {
-		return nil, sandbox.RunLimits{}, err
+		return nil, sandbox.RunLimits{}, nil, nil, err
 	}
 	tests := make([]testData, len(set.Tests))
 	for i, rt := range set.Tests {
@@ -303,7 +303,7 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) ([]testData, sandb
 			CheckerLanguage: set.CheckerLanguage,
 		}
 	}
-	return tests, set.Limits, nil
+	return tests, set.Limits, set.Files, set.CompilerFlags, nil
 }
 
 // verdictResults builds the per-test entries of the VERDICT event. The caller
@@ -337,8 +337,8 @@ func jobBudget(lang sandbox.LangConfig, limits sandbox.RunLimits, tests int) tim
 	return time.Duration(total) + 15*time.Second //nolint:gosec // G115: total is a bounded ns budget, far below MaxInt64
 }
 
-func (w *Worker) compile(ctx context.Context, lang sandbox.LangConfig, sourceCode string) (*sandbox.Result, error) {
-	cmd := sandbox.BuildCompileCmd(lang, sourceCode)
+func (w *Worker) compileWithOptions(ctx context.Context, lang sandbox.LangConfig, sourceCode string, files map[string]string, compilerFlags []string) (*sandbox.Result, error) {
+	cmd := sandbox.BuildCompileCmdWithOptions(lang, sourceCode, files, compilerFlags)
 	results, err := w.judge.Run(ctx, sandbox.Request{Cmd: []sandbox.Cmd{cmd}})
 	if err != nil {
 		return nil, fmt.Errorf("compile: %w", err)
@@ -359,7 +359,7 @@ const maxBatchSize = 32
 // one HTTP round-trip per test. go-judge executes the Cmds in the batch in
 // parallel (up to its -parallelism setting), so a 10-test submission that took
 // 10 sequential round-trips now completes in ~1 round-trip wall-clock time.
-func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox.LangConfig, sourceCode string, tests []testData, fileID string, limits sandbox.RunLimits, log *slog.Logger) (results []model.TestResult, totalCPU, peakMem int64, passed int, overallVerdict model.Verdict, err error) {
+func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox.LangConfig, sourceCode string, tests []testData, fileID string, limits sandbox.RunLimits, extraFiles map[string]string, log *slog.Logger) (results []model.TestResult, totalCPU, peakMem int64, passed int, overallVerdict model.Verdict, err error) {
 	overallVerdict = model.VerdictAccepted
 	results = make([]model.TestResult, 0, len(tests))
 
@@ -407,7 +407,7 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 
 		cmds := make([]sandbox.Cmd, len(batch))
 		for i, tc := range batch {
-			cmds[i] = sandbox.BuildRunCmd(lang, sourceCode, tc.Input, fileID, limits)
+			cmds[i] = sandbox.BuildRunCmdWithOptions(lang, sourceCode, tc.Input, fileID, limits, extraFiles)
 		}
 
 		batchResults, runErr := w.judge.Run(ctx, sandbox.Request{Cmd: cmds})
