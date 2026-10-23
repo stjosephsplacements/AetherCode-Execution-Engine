@@ -415,8 +415,9 @@ func TestCallbackSecret_EncryptDecryptRoundTrip(t *testing.T) {
 	if raw == secret {
 		t.Error("callback_secret is stored as plaintext in Redis — expected AES-GCM ciphertext")
 	}
-	if len(raw) < 5 || raw[:4] != "enc:" {
-		t.Errorf("stored value does not have enc: prefix: %q", raw)
+	const sentinel = "enc:\x00"
+	if len(raw) < len(sentinel) || raw[:len(sentinel)] != sentinel {
+		t.Errorf("stored value does not have enc:\\x00 sentinel: %q", raw)
 	}
 
 	// GetTests must return the original plaintext secret.
@@ -488,5 +489,34 @@ func TestCallbackSecret_NoKeyNoEncryption(t *testing.T) {
 	}
 	if got.CallbackSecret != secret {
 		t.Errorf("CallbackSecret = %q, want %q", got.CallbackSecret, secret)
+	}
+}
+
+// TestCallbackSecret_EncryptedWithoutKey verifies that GetTests returns an error
+// when the stored secret carries the enc:\x00 sentinel but no master key is set.
+func TestCallbackSecret_EncryptedWithoutKey(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ctx := context.Background()
+
+	// Write an encrypted value directly using a key, then read it back without one.
+	writeKey := make([]byte, 32)
+	for i := range writeKey {
+		writeKey[i] = byte(i + 3)
+	}
+	psWriter := NewPubSubWithKey(rdb, writeKey)
+	set := TestSet{
+		Tests:          []TestData{{Input: "a", ExpectedOutput: "b"}},
+		CallbackSecret: "secret-value",
+	}
+	evt := eventlog.New("job-enc-nokey", eventlog.EventQueued, nil)
+	if err := psWriter.PrepareAndEnqueue(ctx, "job-enc-nokey", set, evt, "ac:stream:enk"); err != nil {
+		t.Fatalf("PrepareAndEnqueue: %v", err)
+	}
+
+	// Read back without a key — must error, not silently return garbage.
+	psNoKey := NewPubSub(rdb)
+	_, err := psNoKey.GetTests(ctx, "job-enc-nokey")
+	if err == nil {
+		t.Fatal("expected error reading encrypted secret without key, got nil")
 	}
 }

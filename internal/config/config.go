@@ -252,8 +252,8 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 
 // envHex decodes a hex-encoded byte slice from the environment variable named key.
 // If the variable is absent or empty, nil is returned (caller treats nil as "not set").
-// If the value is present but cannot be decoded, or its decoded length does not equal
-// wantBytes, a warning is printed to stderr and nil is returned.
+// If the value is present but malformed or the wrong length, the process exits: a
+// misconfigured key must not be silently ignored.
 func envHex(key string, wantBytes int) []byte {
 	v := os.Getenv(key)
 	if v == "" {
@@ -261,12 +261,12 @@ func envHex(key string, wantBytes int) []byte {
 	}
 	b, err := hex.DecodeString(v)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "config: %s is not valid hex: %v — ignoring\n", key, err)
-		return nil
+		fmt.Fprintf(os.Stderr, "config: %s is not valid hex: %v\n", key, err)
+		os.Exit(1)
 	}
 	if len(b) != wantBytes {
-		fmt.Fprintf(os.Stderr, "config: %s must decode to exactly %d bytes (got %d) — ignoring\n", key, wantBytes, len(b))
-		return nil
+		fmt.Fprintf(os.Stderr, "config: %s must decode to exactly %d bytes (got %d)\n", key, wantBytes, len(b))
+		os.Exit(1)
 	}
 	return b
 }

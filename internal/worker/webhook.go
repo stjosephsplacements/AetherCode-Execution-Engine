@@ -97,7 +97,8 @@ func ssrfSafeDialContext(ctx context.Context, network, addr string) (net.Conn, e
 // follow a 3xx response that could point to an internal address.
 func newWebhookClient() *http.Client {
 	transport := &http.Transport{
-		DialContext: ssrfSafeDialContext,
+		DialContext:     ssrfSafeDialContext,
+		DisableKeepAlives: true, // each webhook call is one-shot; prevent goroutine leak from idle connections
 	}
 	return &http.Client{
 		Timeout:   5 * time.Second,
