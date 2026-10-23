@@ -1,5 +1,6 @@
 # Spike image: go-judge sandbox server + compilers/runtimes for C, C++, Python, Java, JS.
-FROM criyle/go-judge:latest AS go-judge
+# Pin to v1.13.0; update alongside docker/go-judge/Dockerfile when bumping.
+FROM criyle/go-judge:v1.13.0 AS go-judge
 
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \

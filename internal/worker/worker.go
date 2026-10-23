@@ -303,7 +303,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 			MemoryBytes:  peakMem,
 			Timestamp:    time.Now().UTC(),
 			Results:      eventResults,
-		}, log)
+		}, log, nil)
 	}
 
 	finalVerdict = string(overallVerdict)

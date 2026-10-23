@@ -9,7 +9,7 @@ func validConfig() Config {
 	// Hermetic test fixture: the values below are dummies, not real credentials.
 	return Config{ //nolint:gosec // G101: dummy, non-secret values in a unit-test fixture
 		GatewayAddr:              "127.0.0.1:5100",
-		DatabaseURL:              "postgres://aethercode:aethercode@127.0.0.1:5433/aethercode_exec",
+		DatabaseURL:              "postgres://app:prod-secret@db:5432/aethercode_exec",
 		RedisAddr:                "127.0.0.1:6379",
 		JudgeURL:                 "http://127.0.0.1:5050",
 		JudgeToken:               "a-secret-token",
@@ -31,6 +31,7 @@ func validConfig() Config {
 		GOMEMLIMIT:               0,
 		SandboxStdoutMaxBytes:    8 << 20,
 		SandboxStderrMaxBytes:    1 << 20,
+		AllowUnauth:              true,
 	}
 }
 
@@ -41,10 +42,12 @@ func TestValidateAcceptsValidConfig(t *testing.T) {
 }
 
 func TestValidateRejectsDevToken(t *testing.T) {
-	c := validConfig()
-	c.JudgeToken = "stj-spike-2024"
-	if err := c.Validate(); err == nil {
-		t.Fatal("the development default token must be rejected")
+	for _, tok := range []string{"stj-spike-2024", "aethercode-dev-token"} {
+		c := validConfig()
+		c.JudgeToken = tok
+		if err := c.Validate(); err == nil {
+			t.Fatalf("development default token %q must be rejected", tok)
+		}
 	}
 }
 

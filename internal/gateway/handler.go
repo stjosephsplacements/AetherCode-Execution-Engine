@@ -3,11 +3,13 @@ package gateway
 import (
 	"context"
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime"
@@ -60,7 +62,7 @@ func verifyStreamToken(ctx context.Context, rdb *redis.Client, jobID, token stri
 	if err != nil {
 		return false
 	}
-	return stored == token
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(token)) == 1
 }
 
 // checkOwnership verifies that the caller owns sub. For authenticated callers it
@@ -101,14 +103,15 @@ type Handler struct {
 	ingestSem              chan struct{}
 	startTime              time.Time
 	workerCount            int
+	trustedProxies         []*net.IPNet
 }
 
-func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int) *Handler {
-	return NewTieredHandler(pool, submitStream, runStream, nil, pubsub, judge, rdb, rateLimiter, unauthLimiter, admissionMaxQueueDepth, workerCount)
+func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int, trustedProxies []*net.IPNet) *Handler {
+	return NewTieredHandler(pool, submitStream, runStream, nil, pubsub, judge, rdb, rateLimiter, unauthLimiter, admissionMaxQueueDepth, workerCount, trustedProxies)
 }
 
 // NewTieredHandler creates a Handler with full 3-tier priority stream support.
-func NewTieredHandler(pool *pgxpool.Pool, submitStream, runStream, bulkStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int) *Handler {
+func NewTieredHandler(pool *pgxpool.Pool, submitStream, runStream, bulkStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int, trustedProxies []*net.IPNet) *Handler {
 	return &Handler{
 		pool:                   pool,
 		submitStream:           submitStream,
@@ -123,6 +126,7 @@ func NewTieredHandler(pool *pgxpool.Pool, submitStream, runStream, bulkStream *q
 		ingestSem:              make(chan struct{}, 512),
 		startTime:              time.Now(),
 		workerCount:            workerCount,
+		trustedProxies:         trustedProxies,
 	}
 }
 
@@ -181,6 +185,7 @@ const maxTests = 100
 const maxTestDataSize = 8 << 20  // 8MB per test input/output
 const maxBodySize = 64 << 20     // whole request
 const maxIdempotencyKeyLen = 255 // bytes; matches typical DB index page size
+const maxCallbackSecretLen = 256 // bytes; cap to prevent DoS via oversized secrets
 
 func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	ct := r.Header.Get("Content-Type")
@@ -295,6 +300,13 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "invalid callback_url", http.StatusBadRequest)
 			return
 		}
+		if req.CallbackSecret == "" {
+			slog.Warn("callback_url set without callback_secret; webhook deliveries will be unsigned", "job_hint", req.Language)
+		}
+	}
+	if len(req.CallbackSecret) > maxCallbackSecretLen {
+		jsonError(w, "callback_secret exceeds 256 bytes", http.StatusBadRequest)
+		return
 	}
 	if !model.ValidPriority(req.Priority) {
 		jsonError(w, "priority must be one of: run, submit, bulk", http.StatusBadRequest)
@@ -331,7 +343,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	// Per-IP rate limiting for unauthenticated callers (when enabled via AC_RATE_LIMIT_UNAUTH_PER_MINUTE).
 	// Disabled by default (perMinute=0) to preserve the existing trusted-backend behaviour.
 	if !hasAuth && h.unauthLimiter != nil {
-		if rlResult := h.unauthLimiter.CheckIP(ctx, remoteIP(r)); !rlResult.Allowed {
+		if rlResult := h.unauthLimiter.CheckIP(ctx, remoteIP(r, h.trustedProxies)); !rlResult.Allowed {
 			metrics.RateLimitRejections.WithLabelValues("ip").Inc()
 			retryAfter := int(math.Ceil(rlResult.RetryAfter.Seconds()))
 			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
@@ -431,8 +443,10 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		InteractorLanguage: req.InteractorLanguage,
 		Files:              req.Files,
 		CompilerFlags:      req.CompilerFlags,
-		CallbackURL:        req.CallbackURL,
-		CallbackSecret:     req.CallbackSecret,
+		CallbackURL: req.CallbackURL,
+		// CallbackSecret is validated above (length cap). Encryption at rest
+		// before writing to Redis is handled by the pubsub layer (F18/F8).
+		CallbackSecret: req.CallbackSecret,
 	}
 	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), testSet, queuedEvt, targetStream.StreamName()); err != nil {
 		slog.Error("enqueue failed", "submission_id", jobID, "err", err)

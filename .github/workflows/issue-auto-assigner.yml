@@ -22,12 +22,14 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Process Issue Assignment
+        env:
+          COMMENT_BODY_RAW: ${{ github.event.comment.body }}
         run: |
           set -euo pipefail
           REPO="${GITHUB_REPOSITORY}"
           ISSUE="${{ github.event.issue.number }}"
           COMMENTOR="${{ github.event.comment.user.login }}"
-          COMMENT_BODY="$(echo "${{ github.event.comment.body }}" | tr '[:upper:]' '[:lower:]')"
+          COMMENT_BODY="$(echo "$COMMENT_BODY_RAW" | tr '[:upper:]' '[:lower:]')"
 
           # Ignore bot comments
           case "${COMMENTOR}" in

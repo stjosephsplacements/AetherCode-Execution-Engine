@@ -15,15 +15,15 @@ services:
   db:
     image: postgres:18
     environment:
-      POSTGRES_USER: aethercode
-      POSTGRES_PASSWORD: aethercode
-      POSTGRES_DB: aethercode_exec
+      POSTGRES_USER: ${POSTGRES_USER:-aethercode}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-aethercode_exec}
     ports:
-      - "5433:5432"
+      - "127.0.0.1:5433:5432"
     volumes:
       - db-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U aethercode -d aethercode_exec"]
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-aethercode} -d $${POSTGRES_DB:-aethercode_exec}"]
       interval: 3s
       timeout: 3s
       retries: 20
@@ -31,7 +31,7 @@ services:
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -48,24 +48,25 @@ services:
       - "-http-addr=0.0.0.0:5050"
       - "-mount-conf=/opt/mount.yaml"
       - "-enable-cpu-rate"
-      - "-auth-token=${AC_JUDGE_TOKEN:-aethercode-dev-token}"
+      - "-auth-token=${AC_JUDGE_TOKEN}"
       - "-parallelism=8"
       - "-output-limit=16m"
       - "-copy-out-limit=16m"
       - "-dir=/opt/file-store"
     ports:
-      - "5050:5050"
+      - "127.0.0.1:5050:5050"
 
   engine:
     build: .
     environment:
       AC_GATEWAY_ADDR: "0.0.0.0:5100"
-      AC_DATABASE_URL: "postgres://aethercode:aethercode@db:5433/aethercode_exec"
+      AC_DATABASE_URL: "postgres://${POSTGRES_USER:-aethercode}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-aethercode_exec}"
       AC_REDIS_ADDR: "redis:6379"
       AC_JUDGE_URL: "http://go-judge:5050"
-      AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN:-aethercode-dev-token}"
+      AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN}"
       AC_WORKER_COUNT: "8"
-      AC_AUTH_ENABLED: "false"
+      AC_AUTH_ENABLED: "${AC_AUTH_ENABLED:-false}"
+      AC_ALLOW_UNAUTH: "true"
       AC_LOG_FORMAT: "text"
     ports:
       - "5100:5100"

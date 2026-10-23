@@ -256,7 +256,7 @@ func startStack(t *testing.T, opts stackOptions) *stack {
 	ps := queue.NewPubSub(rdb)
 
 	mux := http.NewServeMux()
-	NewHandler(pool, submitStream, runStream, ps, judge, rdb, opts.limiter, nil, 5000, 1).Register(mux)
+	NewHandler(pool, submitStream, runStream, ps, judge, rdb, opts.limiter, nil, 5000, 1, nil).Register(mux)
 	var root http.Handler = mux
 	if opts.wrap != nil {
 		root = opts.wrap(mux)

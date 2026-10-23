@@ -18,13 +18,14 @@ jobs:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Auto-triage and greet issue author
+        env:
+          TITLE: ${{ github.event.issue.title }}
+          BODY: ${{ github.event.issue.body }}
         run: |
           set -euo pipefail
           REPO="${GITHUB_REPOSITORY}"
           ISSUE="${{ github.event.issue.number }}"
           AUTHOR="${{ github.event.issue.user.login }}"
-          TITLE="${{ github.event.issue.title }}"
-          BODY="${{ github.event.issue.body }}"
 
           # Skip bots
           case "${AUTHOR}" in

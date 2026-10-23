@@ -2,6 +2,7 @@ package ratelimit
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"time"
@@ -77,7 +78,9 @@ func (l *Limiter) check(ctx context.Context, key string) Result {
 
 	windowMs := int64(60_000)
 	burstWindowMs := int64(l.burstWindowSec * 1000)
-	member := fmt.Sprintf("%d-%d", nowMs, nowMs^int64(len(key)))
+	var rb [8]byte
+	_, _ = rand.Read(rb[:])
+	member := fmt.Sprintf("%d-%x", nowMs, rb)
 
 	res, err := rateLimitScript.Run(ctx, l.rdb, []string{key},
 		nowMs, windowMs, burstWindowMs,

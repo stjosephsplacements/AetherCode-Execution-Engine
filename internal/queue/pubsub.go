@@ -2,8 +2,13 @@ package queue
 
 import (
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"strconv"
 	"sync"
 	"time"
@@ -13,6 +18,58 @@ import (
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/eventlog"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
 )
+
+// encryptSecret encrypts plaintext with AES-256-GCM and returns a base64-encoded
+// nonce||ciphertext||tag blob.  The base64 prefix "enc:" lets GetTests distinguish
+// encrypted values from legacy plaintext ones written before the key was configured.
+func encryptSecret(key []byte, plaintext string) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("pubsub: aes cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("pubsub: gcm: %w", err)
+	}
+	nonce := make([]byte, gcm.NonceSize())
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", fmt.Errorf("pubsub: nonce: %w", err)
+	}
+	ct := gcm.Seal(nonce, nonce, []byte(plaintext), nil)
+	return "enc:" + base64.StdEncoding.EncodeToString(ct), nil
+}
+
+// decryptSecret reverses encryptSecret.  If the value does not carry the "enc:" prefix
+// it is returned as-is (backwards-compatible with plaintext values written before the
+// key was configured).
+func decryptSecret(key []byte, stored string) (string, error) {
+	const prefix = "enc:"
+	if len(stored) < len(prefix) || stored[:len(prefix)] != prefix {
+		// Legacy plaintext: return unchanged.
+		return stored, nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(stored[len(prefix):])
+	if err != nil {
+		return "", fmt.Errorf("pubsub: base64 decode secret: %w", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", fmt.Errorf("pubsub: aes cipher: %w", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", fmt.Errorf("pubsub: gcm: %w", err)
+	}
+	ns := gcm.NonceSize()
+	if len(raw) < ns {
+		return "", fmt.Errorf("pubsub: ciphertext too short")
+	}
+	pt, err := gcm.Open(nil, raw[:ns], raw[ns:], nil)
+	if err != nil {
+		return "", fmt.Errorf("pubsub: gcm decrypt: %w", err)
+	}
+	return string(pt), nil
+}
 
 // PrepareAndEnqueue stores tests, publishes the QUEUED event, and enqueues
 // the submission in a single Redis pipeline (1 round trip instead of 3).
@@ -27,6 +84,14 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 	if len(set.Tests) > 0 {
 		key := "ac:tests:" + jobID
 		fields := make([]any, 0, 10+2*len(set.Tests))
+		callbackSecretField := set.CallbackSecret
+		if set.CallbackSecret != "" && len(p.webhookMasterKey) > 0 {
+			encrypted, encErr := encryptSecret(p.webhookMasterKey, set.CallbackSecret)
+			if encErr != nil {
+				return fmt.Errorf("pubsub: encrypt callback_secret: %w", encErr)
+			}
+			callbackSecretField = encrypted
+		}
 		fields = append(fields,
 			"count", len(set.Tests),
 			"cpu_ns", set.Limits.CPU,
@@ -37,7 +102,7 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"interactor_code", set.InteractorCode,
 			"interactor_language", set.InteractorLanguage,
 			"callback_url", set.CallbackURL,
-			"callback_secret", set.CallbackSecret,
+			"callback_secret", callbackSecretField,
 		)
 		if len(set.Files) > 0 {
 			if filesJSON, err := json.Marshal(set.Files); err == nil {
@@ -80,12 +145,20 @@ const eventLogTTL = 10 * time.Minute
 const testDataTTL = 1 * time.Hour
 
 type PubSub struct {
-	rdb *redis.Client
-	wg  sync.WaitGroup
+	rdb              *redis.Client
+	wg               sync.WaitGroup
+	webhookMasterKey []byte // nil means no encryption
 }
 
+// NewPubSub creates a PubSub with no webhook secret encryption (legacy / no key).
 func NewPubSub(rdb *redis.Client) *PubSub {
 	return &PubSub{rdb: rdb}
+}
+
+// NewPubSubWithKey creates a PubSub that encrypts/decrypts callback_secret using the
+// supplied AES-256 master key (must be exactly 32 bytes).  Pass nil to disable encryption.
+func NewPubSubWithKey(rdb *redis.Client, webhookMasterKey []byte) *PubSub {
+	return &PubSub{rdb: rdb, webhookMasterKey: webhookMasterKey}
 }
 
 // Wait blocks until all active Subscribe goroutines have exited.
@@ -220,6 +293,15 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 		_ = json.Unmarshal([]byte(cfj), &compilerFlags)
 	}
 
+	callbackSecret := fields["callback_secret"]
+	if callbackSecret != "" && len(p.webhookMasterKey) > 0 {
+		decrypted, decErr := decryptSecret(p.webhookMasterKey, callbackSecret)
+		if decErr != nil {
+			return TestSet{}, fmt.Errorf("pubsub: decrypt callback_secret: %w", decErr)
+		}
+		callbackSecret = decrypted
+	}
+
 	// Absent on jobs enqueued before the checker existed: empty means exact.
 	return TestSet{
 		Tests:              tests,
@@ -232,7 +314,7 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 		Files:              files,
 		CompilerFlags:      compilerFlags,
 		CallbackURL:        fields["callback_url"],
-		CallbackSecret:     fields["callback_secret"],
+		CallbackSecret:     callbackSecret,
 	}, nil
 }
 

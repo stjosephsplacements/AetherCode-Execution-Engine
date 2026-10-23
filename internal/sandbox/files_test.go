@@ -58,3 +58,13 @@ func TestValidateFiles(t *testing.T) {
 		t.Errorf("expected error for absolute path, got nil")
 	}
 }
+
+func TestValidateFiles_BareDoubleDot(t *testing.T) {
+	files := map[string]string{
+		"..": "malicious",
+	}
+	err := ValidateFiles(files, 10, 1<<20)
+	if err == nil {
+		t.Fatal("expected error for bare '..' key, got nil")
+	}
+}

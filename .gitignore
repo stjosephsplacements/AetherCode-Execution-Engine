@@ -27,6 +27,9 @@ data/
 *.env
 /etc/
 
+# Kubernetes secret values — never commit
+deploy/k8s/.env.secret
+
 # IDE
 .idea/
 .vscode/
