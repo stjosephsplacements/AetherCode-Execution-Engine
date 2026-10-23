@@ -1,7 +1,6 @@
 package gateway
 
 import (
-	"context"
 	"log/slog"
 	"net"
 	"net/http"
@@ -14,10 +13,6 @@ import (
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/metrics"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/requestid"
 )
-
-func RequestID(ctx context.Context) string {
-	return requestid.FromContext(ctx)
-}
 
 type statusWriter struct {
 	http.ResponseWriter
