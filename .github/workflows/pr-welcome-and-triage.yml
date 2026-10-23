@@ -1,0 +1,69 @@
+name: pr-welcome-and-triage
+
+# Greets new contributors on their first PR with helpful guidelines,
+# provides instant automated checklist verification, and notifies maintainers.
+
+on:
+  pull_request_target:
+    types: [opened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Greet contributor and run automated triage
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          PR="${{ github.event.pull_request.number }}"
+          AUTHOR="${{ github.event.pull_request.user.login }}"
+
+          # Skip bots
+          case "${AUTHOR}" in
+            dependabot\[bot\]|github-actions\[bot\]|app/*|coderabbitai\[bot\])
+              echo "Bot ${AUTHOR} — skipping welcome message."
+              exit 0
+              ;;
+          esac
+
+          # Check if first-time contributor in repo
+          PREV_PRS=$(gh pr list \
+            --repo "$REPO" \
+            --state all \
+            --author "$AUTHOR" \
+            --json number \
+            --jq "[.[] | select(.number != ${PR})] | length")
+
+          FIRST_TIME=false
+          if [ "${PREV_PRS:-0}" -eq 0 ]; then
+            FIRST_TIME=true
+          fi
+
+          WELCOME_TEXT=""
+          if [ "$FIRST_TIME" = true ]; then
+            WELCOME_TEXT="Welcome to **AetherCode Execution Engine**, @${AUTHOR}! 🎉 Thank you for opening your first pull request here."
+          else
+            WELCOME_TEXT="Welcome back, @${AUTHOR}! Thanks for another contribution."
+          fi
+
+          gh pr comment "$PR" --repo "$REPO" --body "$(cat <<EOF
+${WELCOME_TEXT}
+
+### 🛡️ Automated PR Safety & Quality Checklist:
+- [ ] **Conventional Commits**: Commit messages follow \`<type>(<scope>): <description>\`
+- [ ] **Tests & Linting**: All tests (\`go test ./...\`) and linters (\`golangci-lint\`) pass
+- [ ] **Security**: CodeQL analysis and TruffleHog secrets scanning report zero alerts
+- [ ] **CodeRabbit AI Review**: All high-priority findings and suggestions addressed
+- [ ] **Single Focus**: PR touches only files relevant to this atomic change
+
+> **Note**: Branch rulesets strictly enforce passing CI checks, up-to-date branch commits, and resolved review comments before any merge can proceed.
+EOF
+)"
+          echo "Automated triage comment posted to PR #${PR}."

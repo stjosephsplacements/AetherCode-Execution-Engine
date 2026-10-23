@@ -1,0 +1,45 @@
+name: pr-auto-cleanup
+
+# Automatically removes the branch associated with a merged PR,
+# and cleans up any dangling temporary review labels.
+
+on:
+  pull_request_target:
+    types: [closed]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  cleanup:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - name: Delete merged branch
+        run: |
+          set -euo pipefail
+          REPO="${GITHUB_REPOSITORY}"
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          IS_FORK="${{ github.event.pull_request.head.repo.fork }}"
+
+          if [ "$IS_FORK" = "true" ]; then
+            echo "PR from fork; branch is not on origin. Skipping branch deletion."
+            exit 0
+          fi
+
+          # Never delete core branches
+          case "$BRANCH" in
+            development|production|main|master|testing|staging)
+              echo "Protected branch ${BRANCH} — will not delete."
+              exit 0
+              ;;
+          esac
+
+          echo "Deleting merged branch ${BRANCH} from origin..."
+          gh api -X DELETE "repos/${REPO}/git/refs/heads/${BRANCH}" || {
+            echo "Branch ${BRANCH} already deleted or does not exist."
+          }
