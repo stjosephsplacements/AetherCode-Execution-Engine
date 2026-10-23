@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/jackc/pgx/v5"
@@ -89,8 +89,8 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, migrationFS fs.FS) error {
 		return fmt.Errorf("db: read migrations dir: %w", err)
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		return entries[i].Name() < entries[j].Name()
+	slices.SortFunc(entries, func(a, b fs.DirEntry) int {
+		return strings.Compare(a.Name(), b.Name())
 	})
 
 	for _, entry := range entries {
