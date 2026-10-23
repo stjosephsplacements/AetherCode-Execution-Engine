@@ -43,3 +43,6 @@ coverage.out
 
 # Compiled Postman collection (generated, not source)
 postman_collection_generated.json
+
+# Superpowers skill docs (local only)
+docs/superpowers/
