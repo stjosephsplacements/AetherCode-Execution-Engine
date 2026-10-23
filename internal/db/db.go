@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -18,6 +19,8 @@ func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
 	}
 	config.MinConns = 16
 	config.MaxConns = 128
+	// Optimize query execution by caching prepared statements and query descriptions
+	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
@@ -41,6 +44,7 @@ func ConnectAppRole(ctx context.Context, appURL string) (*pgxpool.Pool, error) {
 	}
 	config.MinConns = 4
 	config.MaxConns = 32
+	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
 
 	pool, err := pgxpool.NewWithConfig(ctx, config)
 	if err != nil {
