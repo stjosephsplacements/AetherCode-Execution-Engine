@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/pprof"
 	"runtime/debug"
@@ -196,6 +197,13 @@ func main() {
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      0, // SSE streams are long-lived
 		IdleTimeout:       120 * time.Second,
+		ConnState: func(c net.Conn, state http.ConnState) {
+			if state == http.StateNew {
+				if tcpConn, ok := c.(*net.TCPConn); ok {
+					_ = tcpConn.SetNoDelay(true)
+				}
+			}
+		},
 	}
 
 	go func() {

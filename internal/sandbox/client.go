@@ -38,10 +38,20 @@ func NewClient(baseURL, authToken string) *Client {
 				IdleConnTimeout:       90 * time.Second,
 				ResponseHeaderTimeout: 0, // batched /run calls vary in duration; context deadline governs
 				DisableCompression:    true,
-				DialContext: (&net.Dialer{
-					Timeout:   5 * time.Second,
-					KeepAlive: 30 * time.Second,
-				}).DialContext,
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					dialer := &net.Dialer{
+						Timeout:   5 * time.Second,
+						KeepAlive: 30 * time.Second,
+					}
+					conn, err := dialer.DialContext(ctx, network, addr)
+					if err != nil {
+						return nil, err
+					}
+					if tcpConn, ok := conn.(*net.TCPConn); ok {
+						_ = tcpConn.SetNoDelay(true)
+					}
+					return conn, nil
+				},
 			},
 		},
 	}

@@ -197,10 +197,38 @@ func (h *Handler) HandleStream(w http.ResponseWriter, r *http.Request) {
 			if _, err := w.Write(evt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload (json.Marshal HTML-escapes it); the stream is machine-readable, not user-controlled HTML
 				return
 			}
-			flusher.Flush()
 			if evt.IsTerminal() {
+				flusher.Flush()
 				return
 			}
+
+			// Batch flush: drain any closely pending events in the queue without flushing repeatedly
+		drainLoop:
+			for {
+				select {
+				case nextEvt, ok := <-eventCh:
+					if !ok {
+						break drainLoop
+					}
+					if replayedUpTo != "" && compareEventIDs(nextEvt.ID, replayedUpTo) <= 0 {
+						continue
+					}
+					if lastEventID != "" && compareEventIDs(nextEvt.ID, lastEventID) <= 0 {
+						continue
+					}
+					replayedUpTo = nextEvt.ID
+					if _, err := w.Write(nextEvt.MarshalSSE()); err != nil { //nolint:gosec // G705: server-computed SSE payload
+						return
+					}
+					if nextEvt.IsTerminal() {
+						flusher.Flush()
+						return
+					}
+				default:
+					break drainLoop
+				}
+			}
+			flusher.Flush()
 		}
 	}
 }

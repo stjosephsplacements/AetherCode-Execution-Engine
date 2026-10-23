@@ -71,6 +71,7 @@ An enterprise-grade, high-throughput, on-premise distributed code execution and 
 - **Prepared Statement Caching & Query Pipelining:** Configured with `pgx.QueryExecModeCacheDescribe` on all database pools, eliminating redundant query planning and parsing round-trips.
 - **Dead-Letter Queue (DLQ) Stream Routing:** Failed submissions exceeding maximum retry thresholds are automatically extracted by background reclaimers and deposited into a dedicated `ac:dlq:poison` Redis stream for forensic inspection.
 - **Compilation Artifact Caching:** Compiled binaries (C, C++, Go, Java) are deduplicated by cryptographic SHA-256 hashes and cached across worker nodes, eliminating redundant compile cycles and reducing p95 latency by up to 1,200 ms.
+- **TCP Socket Optimization & SSE Batch Flushing:** Sandbox HTTP transports and SSE client sockets enforce `TCP_NODELAY` to bypass Nagle packet buffering delays, paired with micro-batched event flushes to streamline real-time test event delivery.
 - **3-Tier Weighted Fair Queuing (WFQ):** Redis 7 Streams utilize a weighted consumer model (`ac:submissions:run`, `ac:submissions:submit`, and `ac:submissions:bulk`) preventing background batch workloads from starving interactive user test runs.
 - **Atomic State Persistence:** PostgreSQL 18 state transitions use Compare-And-Swap (CAS) semantics, preventing race conditions, duplicate grading runs, and inconsistent terminal states.
 
