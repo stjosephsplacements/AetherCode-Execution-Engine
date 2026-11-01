@@ -1,0 +1,41 @@
+README.md
+  s_40851fd2a7ba5d::t_23cdade1d3146e 303,311
+internal/gateway/handler.go
+  s_40851fd2a7ba5d::t_946219236faa09 162-164,177-179,254-273,456
+internal/worker/env_test.go
+  s_40851fd2a7ba5d::t_8d366b81a066f5 1-116
+internal/gateway/handler_test.go
+  s_40851fd2a7ba5d::t_45753e7e519036 9,562-631
+internal/worker/worker.go
+  s_40851fd2a7ba5d::t_047639e42aa45c 105,332,455,517
+internal/queue/pubsub.go
+  s_40851fd2a7ba5d::t_67d93e9b6a9995 10,124-130,289-306,361
+internal/worker/interactor_test.go
+  s_40851fd2a7ba5d::t_4b2fb12b82b60d 79
+internal/sandbox/env_test.go
+  s_40851fd2a7ba5d::t_cdb63102d91f52 1-122
+internal/queue/pubsub_test.go
+  s_40851fd2a7ba5d::t_784d8f667b8994 5,364,369-411
+internal/sandbox/language.go
+  s_40851fd2a7ba5d::t_74e01eb331888d 305,308-311,315
+internal/sandbox/env.go
+  s_40851fd2a7ba5d::t_f6d171845e6a8d 1-167
+internal/worker/interactor.go
+  s_40851fd2a7ba5d::t_958a9578680f42 20,25-28
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a9ee9556483b8c625d7af48c00fa61c34d68d798",
+  "prompts": {},
+  "sessions": {
+    "s_40851fd2a7ba5d": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "1ebb9043-d11d-46bd-86f5-1807394d0083",
+        "model": "claude-sonnet-5-5"
+      },
+      "human_author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
