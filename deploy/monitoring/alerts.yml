@@ -78,3 +78,43 @@ groups:
           description: >
             Prometheus cannot scrape the aethercode-exec metrics endpoint.
             The process may have crashed or the host may be unreachable.
+
+      # ── Latency (see README, "Performance Tuning") ──────────────────────────
+      - alert: QueueWaitP99High
+        expr: histogram_quantile(0.99, sum by (le, stream) (rate(ac_queue_wait_seconds_bucket[5m]))) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Jobs in {{ $labels.stream }} wait more than 30s at the p99"
+          description: >
+            The p99 wait between enqueue and a worker reading the job is
+            {{ $value | humanizeDuration }}. Workers or sandbox slots are the
+            bottleneck: compare AC_WORKER_COUNT with go-judge -parallelism and CPU.
+
+      - alert: JobStageP99High
+        expr: histogram_quantile(0.99, sum by (le, stage) (rate(ac_job_stage_seconds_bucket{stage=~"claim|load_tests|persist|publish"}[5m]))) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "The {{ $labels.stage }} stage takes more than 1s at the p99"
+          description: >
+            claim, persist and publish are database and Redis round trips and
+            load_tests is a Redis read. Check PostgreSQL and Redis latency and
+            the connection pool sizes (AC_DB_MAX_CONNS, AC_REDIS_POOL_SIZE).
+
+      - alert: CompileCacheMostlyMissing
+        expr: >
+          sum(rate(ac_compile_cache_misses_total[15m]))
+          / (sum(rate(ac_compile_cache_hits_total[15m])) + sum(rate(ac_compile_cache_misses_total[15m]))) > 0.9
+          and sum(rate(ac_compile_cache_misses_total[15m])) > 0.5
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "Almost every compile is a cache miss"
+          description: >
+            Expected when every job carries different source. If one source is
+            sent as many jobs (one per test), check that the caller is not
+            defeating the compile cache.

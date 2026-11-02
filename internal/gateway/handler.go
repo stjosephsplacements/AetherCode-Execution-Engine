@@ -177,6 +177,8 @@ type executeRequest struct {
 	CallbackSecret string `json:"callback_secret,omitempty"`
 	// Optional priority tier: "run" (default / interactive), "submit" (contest / assessment), or "bulk" (batch re-judge).
 	Priority string `json:"priority"`
+	// Optional output mode: "full" (default), "preview" (256-byte previews only) or "none".
+	Output string `json:"output"`
 
 	// Mode and ProblemVersionID exist only to reject legacy submit-mode requests.
 	Mode             string  `json:"mode"`
@@ -354,6 +356,10 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "callback_secret exceeds 256 bytes", http.StatusBadRequest)
 		return
 	}
+	if !model.ValidOutputMode(req.Output) {
+		jsonError(w, "output must be one of: full, preview, none", http.StatusBadRequest)
+		return
+	}
 	if !model.ValidPriority(req.Priority) {
 		jsonError(w, "priority must be one of: run, submit, bulk", http.StatusBadRequest)
 		return
@@ -517,6 +523,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		// CallbackSecret is validated above (length cap). Encryption at rest
 		// before writing to Redis is handled by the pubsub layer (F18/F8).
 		CallbackSecret: req.CallbackSecret,
+		Output:         req.Output,
 	}
 	if err := h.pubsub.PrepareAndEnqueue(ctx, jobID.String(), testSet, queuedEvt, targetStream.StreamName()); err != nil {
 		slog.Error("enqueue failed", "submission_id", jobID, "err", err)

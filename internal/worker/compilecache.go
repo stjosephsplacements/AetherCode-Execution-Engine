@@ -1,6 +1,7 @@
 package worker
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
@@ -15,16 +16,89 @@ type cacheEntry struct {
 }
 
 type compileCache struct {
-	mu  sync.Mutex
-	m   map[string]cacheEntry
-	ttl time.Duration
+	mu       sync.Mutex
+	m        map[string]cacheEntry
+	inflight map[string]*compileFlight
+	ttl      time.Duration
 }
 
 func newCompileCache(ttl time.Duration) *compileCache {
 	return &compileCache{
-		m:   make(map[string]cacheEntry),
-		ttl: ttl,
+		m:        make(map[string]cacheEntry),
+		inflight: make(map[string]*compileFlight),
+		ttl:      ttl,
 	}
+}
+
+// compileOutcome is what one compile produced: the cached binary's file id, or
+// the compiler's diagnostics when the source does not compile.
+type compileOutcome struct {
+	fileID string
+	failed bool
+	stderr string
+}
+
+// compileFlight is one compile in progress, shared by every job that asked for
+// the same source while it ran.
+type compileFlight struct {
+	done    chan struct{}
+	outcome compileOutcome
+	err     error
+}
+
+// compile returns the outcome for key, running run at most once for jobs that
+// arrive together. Jobs that arrive while a compile is running wait for it
+// instead of repeating it (shared is true for them), and jobs that arrive after
+// it succeeds hit the cache. A source that does not compile is shared with the
+// jobs that waited, because the same source fails the same way; it is not
+// cached. If the leader's run fails for a reason of its own (the sandbox was
+// unreachable, say), each waiter tries again for itself. With a zero ttl the
+// cache is off and every call runs run.
+func (c *compileCache) compile(ctx context.Context, key string, run func() (compileOutcome, error)) (outcome compileOutcome, shared bool, err error) {
+	if c.ttl == 0 {
+		outcome, err = run()
+		return outcome, false, err
+	}
+	for {
+		c.mu.Lock()
+		if e, ok := c.m[key]; ok && time.Since(e.created) <= c.ttl {
+			c.mu.Unlock()
+			return compileOutcome{fileID: e.fileID}, true, nil
+		}
+		flight, running := c.inflight[key]
+		if !running {
+			flight = &compileFlight{done: make(chan struct{})}
+			c.inflight[key] = flight
+			c.mu.Unlock()
+			return c.lead(key, flight, run)
+		}
+		c.mu.Unlock()
+
+		select {
+		case <-flight.done:
+			if flight.err == nil {
+				return flight.outcome, true, nil
+			}
+			// The leader failed for its own reasons: try again, as the leader if no one else has.
+		case <-ctx.Done():
+			return compileOutcome{}, false, ctx.Err()
+		}
+	}
+}
+
+func (c *compileCache) lead(key string, flight *compileFlight, run func() (compileOutcome, error)) (compileOutcome, bool, error) {
+	defer func() {
+		c.mu.Lock()
+		delete(c.inflight, key)
+		c.mu.Unlock()
+		close(flight.done)
+	}()
+	outcome, err := run()
+	flight.outcome, flight.err = outcome, err
+	if err == nil && !outcome.failed {
+		c.put(key, outcome.fileID)
+	}
+	return outcome, false, err
 }
 
 func compileCacheKey(language, source string) string {

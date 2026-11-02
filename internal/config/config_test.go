@@ -14,6 +14,9 @@ func validConfig() Config {
 		JudgeURL:                 "http://127.0.0.1:5050",
 		JudgeToken:               "a-secret-token",
 		WorkerCount:              8,
+		DBMaxConns:               128,
+		RedisPool:                256,
+		RedisMinIdle:             32,
 		TestParallelism:          4,
 		StreamName:               "ac:submissions",
 		ConsumerGroup:            "workers",
@@ -110,5 +113,24 @@ func TestEnvDuration(t *testing.T) {
 	}
 	if got := envDuration("AC_TEST_DUR_UNSET", 3*time.Second); got != 3*time.Second {
 		t.Fatalf("envDuration unset = %v, want fallback 3s", got)
+	}
+}
+
+func TestValidate_PoolSizes(t *testing.T) {
+	for name, mutate := range map[string]func(*Config){
+		"db too small":    func(c *Config) { c.DBMaxConns = 1 },
+		"db too large":    func(c *Config) { c.DBMaxConns = 5000 },
+		"redis too small": func(c *Config) { c.RedisPool = 1 },
+		"idle above pool": func(c *Config) { c.RedisMinIdle = c.RedisPool + 1 },
+		"negative idle":   func(c *Config) { c.RedisMinIdle = -1 },
+	} {
+		cfg := validConfig()
+		mutate(&cfg)
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("%s: Validate accepted it", name)
+		}
+	}
+	if err := validConfig().Validate(); err != nil {
+		t.Errorf("valid config rejected: %v", err)
 	}
 }

@@ -52,3 +52,35 @@ func TestVerdictResults_TruncatesTheSandboxMessage(t *testing.T) {
 		t.Fatalf("message length = %d, want 512", len(s))
 	}
 }
+
+func TestVerdictResultsFor_OutputModes(t *testing.T) {
+	results := []model.TestResult{{TestIndex: 0, Verdict: model.VerdictAccepted, StdoutPreview: strings.Repeat("o", 300), StderrPreview: "warn", ExitStatus: 0}}
+	keys := func(mode string) map[string]bool {
+		out := map[string]bool{}
+		for k := range verdictResultsFor(results, mode)[0] {
+			out[k] = true
+		}
+		return out
+	}
+	for _, mode := range []string{"", model.OutputFull} {
+		k := keys(mode)
+		if !k["stdout"] || !k["stderr"] || !k["stdout_preview"] || !k["stderr_preview"] {
+			t.Errorf("mode %q dropped output: %v", mode, k)
+		}
+	}
+	k := keys(model.OutputPreview)
+	if k["stdout"] || k["stderr"] || !k["stdout_preview"] || !k["stderr_preview"] {
+		t.Errorf("preview mode keys = %v, want previews only", k)
+	}
+	k = keys(model.OutputNone)
+	if k["stdout"] || k["stderr"] || k["stdout_preview"] || k["stderr_preview"] {
+		t.Errorf("none mode keys = %v, want no output text", k)
+	}
+	// Verdicts and measurements always stay.
+	for _, mode := range []string{model.OutputPreview, model.OutputNone} {
+		k := keys(mode)
+		if !k["verdict"] || !k["cpu_time_ns"] || !k["exit_status"] || !k["test_index"] {
+			t.Errorf("mode %q lost the verdict or measurements: %v", mode, k)
+		}
+	}
+}
