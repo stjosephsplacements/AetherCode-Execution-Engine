@@ -214,6 +214,7 @@ Configuration parameters are loaded from environment variables on startup. Refer
 | `AC_GATEWAY_ADDR` | `127.0.0.1:5100` | Gateway HTTP service listen address |
 | `AC_DATABASE_URL` | `postgres://aethercode:aethercode@127.0.0.1:5433/aethercode_exec` | PostgreSQL connection DSN |
 | `AC_REDIS_ADDR` | `127.0.0.1:6379` | Redis host address and port |
+| `AC_REDIS_PASSWORD` | _(empty)_ | Redis password, when the server requires one |
 | `AC_JUDGE_URL` | `http://127.0.0.1:5050` | go-judge sandbox REST API endpoint |
 | `AC_JUDGE_TOKEN` | *(Required)* | Secret bearer token authenticating requests to go-judge |
 | `AC_WORKER_COUNT` | `8` | Total concurrent worker execution goroutines |
