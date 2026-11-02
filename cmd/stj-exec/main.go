@@ -89,6 +89,7 @@ func main() {
 	// Redis
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         cfg.RedisAddr,
+		Password:     cfg.RedisPassword,
 		PoolSize:     cfg.RedisPool,
 		MinIdleConns: cfg.RedisMinIdle,
 	})

@@ -12,12 +12,13 @@ import (
 )
 
 type Config struct {
-	GatewayAddr string
-	DatabaseURL string
-	RedisAddr   string
-	JudgeURL    string
-	JudgeToken  string
-	WorkerCount int
+	GatewayAddr   string
+	DatabaseURL   string
+	RedisAddr     string
+	RedisPassword string
+	JudgeURL      string
+	JudgeToken    string
+	WorkerCount   int
 	// Connection pool sizes. The defaults suit up to about 128 concurrent
 	// database users; ingest alone can use 512 at once (see the admission
 	// semaphore), so raise DBMaxConns before raising ingest concurrency.
@@ -86,6 +87,7 @@ func Load() Config {
 		GatewayAddr:   env("AC_GATEWAY_ADDR", "127.0.0.1:5100"),
 		DatabaseURL:   env("AC_DATABASE_URL", "postgres://aethercode:aethercode@127.0.0.1:5433/aethercode_exec"),
 		RedisAddr:     env("AC_REDIS_ADDR", "127.0.0.1:6379"),
+		RedisPassword: env("AC_REDIS_PASSWORD", ""),
 		JudgeURL:      env("AC_JUDGE_URL", "http://127.0.0.1:5050"),
 		JudgeToken:    env("AC_JUDGE_TOKEN", ""),
 		WorkerCount:   envInt("AC_WORKER_COUNT", 8),
