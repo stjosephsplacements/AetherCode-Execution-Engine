@@ -1,0 +1,14 @@
+internal/queue/hub_test.go
+  h_05a82d06d5f9e3 85-90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "87fbff13c361c9c6319f9dcdc2c958c74c392076",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
