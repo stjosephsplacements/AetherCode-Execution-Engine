@@ -1,0 +1,44 @@
+CHANGELOG.md
+  h_05a82d06d5f9e3 24-31
+README.md
+  h_05a82d06d5f9e3 602-626
+go.mod
+  h_05a82d06d5f9e3 42
+internal/gateway/handler.go
+  h_05a82d06d5f9e3 442,863-876
+internal/gateway/handler_test.go
+  h_05a82d06d5f9e3 19,720-747
+internal/metrics/drain.go
+  h_05a82d06d5f9e3 1-74
+internal/metrics/drain_test.go
+  h_05a82d06d5f9e3 1-37
+internal/metrics/metrics.go
+  h_05a82d06d5f9e3 77-93
+internal/queue/hub.go
+  h_05a82d06d5f9e3 1-156
+internal/queue/hub_test.go
+  h_05a82d06d5f9e3 1-124
+internal/queue/pubsub.go
+  h_05a82d06d5f9e3 13,172-174,188-194,241-245,247-254,258-261,263-264
+internal/queue/stream.go
+  h_05a82d06d5f9e3 7-8,104,260,310,545-560
+internal/queue/wait_test.go
+  h_05a82d06d5f9e3 1-27
+internal/sandbox/args_test.go
+  h_05a82d06d5f9e3 49-68
+internal/sandbox/language.go
+  h_05a82d06d5f9e3 134,141,210
+internal/worker/worker.go
+  h_05a82d06d5f9e3 134-148,168-169,173,197-200,280,291-292,303,317,321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a2302b9417295e108aafbe9860eeb87d15164102",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
