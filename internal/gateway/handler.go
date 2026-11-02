@@ -439,7 +439,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		slog.Error("admission check failed, allowing", "err", err)
 	} else if !admitted {
-		w.Header().Set("Retry-After", "10")
+		w.Header().Set("Retry-After", strconv.Itoa(h.busyRetryAfter(ctx, targetStream.StreamName())))
 		jsonError(w, "server is busy, try again later", http.StatusTooManyRequests)
 		return
 	}
@@ -859,4 +859,18 @@ func (h *Handler) StartLanguageProbe(ctx context.Context, interval time.Duration
 			}
 		}
 	}()
+}
+
+// busyRetryAfter is how long a rejected caller should wait: the time for the
+// queue to fall back under the admission limit at the rate jobs are finishing,
+// between 1 and 60 seconds. Without a measured rate it is the old fixed 10.
+func (h *Handler) busyRetryAfter(ctx context.Context, stream string) int {
+	if metrics.JobsDrain.Rate() <= 0 {
+		return 10
+	}
+	depth, err := h.rdb.XLen(ctx, stream).Result()
+	if err != nil {
+		return 10
+	}
+	return metrics.JobsDrain.RetryAfter(depth-int64(h.admissionMaxQueueDepth)+1, 1, 60)
 }

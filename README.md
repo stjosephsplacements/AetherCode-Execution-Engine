@@ -599,6 +599,31 @@ feature/* / fix/*  ──>  development (CI Gate)  ──>  production (Protecte
 
 ---
 
+## Performance Tuning
+
+**Find the stage first.** A slow p99 is usually queueing, not execution. Per job, the engine records where the time went:
+
+| Metric | Meaning |
+|---|---|
+| `ac_queue_wait_seconds{stream}` | Enqueue to a worker reading the job |
+| `ac_job_stage_seconds{stage}` | `claim`, `load_tests`, `run`, `persist`, `publish` |
+| `ac_compile_duration_seconds{language}` | The compile step, per language |
+| `ac_job_processing_duration_seconds{language,verdict}` | Dequeue to verdict |
+
+```promql
+histogram_quantile(0.99, sum by (le) (rate(ac_queue_wait_seconds_bucket[5m])))
+histogram_quantile(0.99, sum by (le, stage) (rate(ac_job_stage_seconds_bucket[5m])))
+```
+
+If queue wait dominates, add capacity; if `run` dominates, look at the language and the limits; if `persist` or `publish` do, look at PostgreSQL and Redis.
+
+**Sizing.**
+- Keep `AC_WORKER_COUNT` equal to go-judge's `-parallelism`; more workers than sandbox slots only queue inside go-judge.
+- On a multi-socket host, run one engine plus one go-judge per NUMA node (for example `numactl --cpunodebind=0 --membind=0` for each pair, each with its own listen address and `-parallelism` set to that node's physical cores) rather than one pair on one node. The published benchmark used a single node of a 256-thread host.
+- Raise go-judge's `-pre-fork` toward its parallelism so a burst does not wait for sandbox creation.
+
+**Overload.** `AC_ADMISSION_MAX_QUEUE_DEPTH` bounds how long a job can wait. A job admitted at the limit waits about depth ÷ completion rate, so lower the limit if that exceeds your verdict SLO. Rejected callers receive `Retry-After` computed from the measured completion rate.
+
 ## Contributing
 
 Contributions are welcome. Please consult:

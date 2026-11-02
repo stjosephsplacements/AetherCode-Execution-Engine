@@ -74,4 +74,21 @@ var (
 		Name:      "compile_cache_misses_total",
 		Help:      "Compile cache misses — source was not in cache, compilation required.",
 	})
+
+	QueueWaitSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "ac",
+		Name:      "queue_wait_seconds",
+		Help:      "Time a job waited in its stream between being enqueued and being read by a worker.",
+		Buckets:   []float64{0.005, 0.025, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60, 120},
+	}, []string{"stream"})
+
+	// JobStageSeconds splits a job's time into its stages so a slow p99 can be
+	// attributed: claim, load_tests, run, persist and publish. Compile has its
+	// own histogram (CompileDuration) because it is labelled by language.
+	JobStageSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "ac",
+		Name:      "job_stage_seconds",
+		Help:      "Time spent in each stage of processing a job.",
+		Buckets:   []float64{0.001, 0.005, 0.025, 0.1, 0.5, 1, 2.5, 5, 10, 30, 60},
+	}, []string{"stage"})
 )
