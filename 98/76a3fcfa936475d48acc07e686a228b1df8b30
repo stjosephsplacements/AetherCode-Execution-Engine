@@ -1,0 +1,14 @@
+internal/gateway/handler_test.go
+  h_05a82d06d5f9e3 19
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "9876a3fcfa936475d48acc07e686a228b1df8b30",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
