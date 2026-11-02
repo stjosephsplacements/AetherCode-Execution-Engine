@@ -8,7 +8,8 @@
 # To update: docker pull criyle/go-judge:<new-tag> && docker inspect --format='{{.RepoDigests}}' criyle/go-judge:<new-tag>
 FROM criyle/go-judge:v1.13.0 AS go-judge
 
-FROM debian:bookworm-slim
+# Debian 13 (trixie): openjdk-21 is not packaged for bookworm.
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
       gcc g++ make \
       python3 \
