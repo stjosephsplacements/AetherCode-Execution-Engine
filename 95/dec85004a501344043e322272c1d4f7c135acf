@@ -1,0 +1,18 @@
+README.md
+  h_05a82d06d5f9e3 217
+cmd/stj-exec/main.go
+  h_05a82d06d5f9e3 92
+internal/config/config.go
+  h_05a82d06d5f9e3 15-21,90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "95dec85004a501344043e322272c1d4f7c135acf",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
