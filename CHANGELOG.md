@@ -5,6 +5,22 @@ All notable changes to the AetherCode Execution Engine are documented here.
 This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and uses [semantic versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Richer results** — each test in the `VERDICT` event, the webhook and the
+  stored results now carries `exit_status`, `sandbox_status` and `message`
+  beside the existing CPU, wall-clock (`run_time_ns`) and memory figures.
+- **Run controls** — `stack_limit_kb`, `max_processes` and `args` (command-line
+  arguments) on `POST /api/v1/execute`, validated at the gateway and stored with
+  the job.
+- **Language availability** — the engine checks at startup, and every five
+  minutes, that each registered language's compiler and runtime exist in the
+  sandbox. `GET /api/v1/languages` reports `available`, and `POST
+  /api/v1/execute` answers 400 for a language that is not installed instead of
+  failing the job later.
+
 ## [0.1.0] — 2026-10-04
 
 First open-source release.

@@ -358,7 +358,7 @@ func TestPrepareAndGetTests_RoundTripsChecker(t *testing.T) {
 	if got.Checker != "float" {
 		t.Errorf("Checker = %q, want float", got.Checker)
 	}
-	if got.Limits != set.Limits {
+	if !reflect.DeepEqual(got.Limits, set.Limits) {
 		t.Errorf("Limits = %+v, want %+v", got.Limits, set.Limits)
 	}
 	if !reflect.DeepEqual(got.Tests, set.Tests) {
@@ -562,5 +562,39 @@ func TestCallbackSecret_EncryptedWithoutKey(t *testing.T) {
 	_, err := psNoKey.GetTests(ctx, "job-enc-nokey")
 	if err == nil {
 		t.Fatal("expected error reading encrypted secret without key, got nil")
+	}
+}
+
+func TestPrepareAndGetTests_RoundTripsRunControls(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ps := NewPubSub(rdb)
+	ctx := context.Background()
+	set := TestSet{
+		Tests:  []TestData{{Input: "1", ExpectedOutput: "1"}},
+		Limits: sandbox.RunLimits{CPU: 1_000_000_000, Memory: 64 << 20, Stack: 8 << 20, Procs: 4, Args: []string{"-n", "5"}},
+	}
+	evt := eventlog.New("job-controls", eventlog.EventQueued, nil)
+	if err := ps.PrepareAndEnqueue(ctx, "job-controls", set, evt, "ac:submissions:run"); err != nil {
+		t.Fatalf("PrepareAndEnqueue: %v", err)
+	}
+	got, err := ps.GetTests(ctx, "job-controls")
+	if err != nil {
+		t.Fatalf("GetTests: %v", err)
+	}
+	if !reflect.DeepEqual(got.Limits, set.Limits) {
+		t.Errorf("Limits = %+v, want %+v", got.Limits, set.Limits)
+	}
+}
+
+func TestGetTests_RejectsCorruptArgs(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	ps := NewPubSub(rdb)
+	ctx := context.Background()
+	for name, value := range map[string]string{"not json": "nope", "null bytes": `["a\u0000b"]`} {
+		key := "ac:tests:job-" + name
+		rdb.HSet(ctx, key, "count", 1, "0:input", "", "0:expected", "", "args_json", value)
+		if _, err := ps.GetTests(ctx, "job-"+name); err == nil {
+			t.Errorf("%s: GetTests accepted corrupt args", name)
+		}
 	}
 }

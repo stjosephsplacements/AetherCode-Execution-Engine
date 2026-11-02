@@ -629,3 +629,90 @@ func TestHandleExecute_MergesSubmissionEnvIntoTests(t *testing.T) {
 		}
 	}
 }
+
+func TestHandleExecute_RejectsInvalidRunControls(t *testing.T) {
+	judgeSrv := fakeJudgeServer(t, "1.13.0")
+	judge := sandbox.NewClient(judgeSrv.URL, "test-token")
+	_, rdb := newTestRedis(t)
+
+	submitStream := queue.NewStream(rdb, "ac:submissions:submit", "workers")
+	runStream := queue.NewStream(rdb, "ac:submissions:run", "workers")
+	h := NewHandler(nil, submitStream, runStream, queue.NewPubSub(rdb), judge, rdb, nil, nil, 5000, 8, nil)
+
+	cases := []struct{ name, body, msg string }{
+		{"stack too small",
+			`{"language":"c","source_code":"int main(){}","stack_limit_kb":10,"tests":[{"input":"","expected_output":""}]}`,
+			"stack_limit_kb must be between 1024 and 1048576"},
+		{"too many processes",
+			`{"language":"c","source_code":"int main(){}","max_processes":1000,"tests":[{"input":"","expected_output":""}]}`,
+			"max_processes must be between 1 and 512"},
+		{"zero processes",
+			`{"language":"c","source_code":"int main(){}","max_processes":0,"tests":[{"input":"","expected_output":""}]}`,
+			"max_processes must be between 1 and 512"},
+		{"too many args",
+			`{"language":"c","source_code":"int main(){}","args":["1","2","3","4","5","6","7","8","9","10","11","12","13","14","15","16","17"],"tests":[{"input":"","expected_output":""}]}`,
+			"args: at most 16 arguments"},
+		{"args for sqlite",
+			`{"language":"sqlite","source_code":"select 1;","args":["x"],"tests":[{"input":"","expected_output":"1"}]}`,
+			"args are not supported for sqlite"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assertExecuteError(t, postExecute(h, tc.body), http.StatusBadRequest, tc.msg)
+		})
+	}
+}
+
+func TestLanguageAvailability(t *testing.T) {
+	var runs int
+	judgeSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/run" {
+			http.NotFound(w, r)
+			return
+		}
+		runs++
+		var req sandbox.Request
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		results := make([]sandbox.Result, len(req.Cmd))
+		for i, cmd := range req.Cmd {
+			results[i] = sandbox.Result{Status: sandbox.StatusAccepted}
+			if cmd.Args[2] == "/usr/bin/rustc" {
+				results[i] = sandbox.Result{Status: sandbox.StatusNonzeroExit, ExitStatus: 1}
+			}
+		}
+		_ = json.NewEncoder(w).Encode(results)
+	}))
+	t.Cleanup(judgeSrv.Close)
+	_, rdb := newTestRedis(t)
+	h := NewHandler(nil, queue.NewStream(rdb, "ac:submissions:submit", "workers"), queue.NewStream(rdb, "ac:submissions:run", "workers"), queue.NewPubSub(rdb), sandbox.NewClient(judgeSrv.URL, "t"), rdb, nil, nil, 5000, 8, nil)
+
+	if !h.languageAvailable("rust") {
+		t.Fatal("rust must be accepted before the first probe")
+	}
+	if err := h.ProbeLanguages(context.Background()); err != nil {
+		t.Fatalf("ProbeLanguages: %v", err)
+	}
+	if h.languageAvailable("rust") || !h.languageAvailable("python") {
+		t.Fatalf("rust = %v, python = %v, want rust unavailable and python available", h.languageAvailable("rust"), h.languageAvailable("python"))
+	}
+	assertExecuteError(t, postExecute(h, `{"language":"rust","source_code":"fn main(){}","tests":[{"input":"","expected_output":""}]}`),
+		http.StatusBadRequest, "language rust is not installed on this engine")
+
+	rec := httptest.NewRecorder()
+	h.HandleLanguages(rec, httptest.NewRequest(http.MethodGet, "/api/v1/languages", nil))
+	var listed []struct {
+		ID        string `json:"id"`
+		Available bool   `json:"available"`
+	}
+	if err := json.NewDecoder(rec.Body).Decode(&listed); err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range listed {
+		if l.ID == "rust" && l.Available {
+			t.Error("GET /languages reports rust available")
+		}
+		if l.ID == "python" && !l.Available {
+			t.Error("GET /languages reports python unavailable")
+		}
+	}
+}

@@ -19,6 +19,11 @@ const (
 	MaxRunCPU = 20_000_000_000 // 20s
 	MinRunMem = 16 << 20       // 16MB
 	MaxRunMem = 2 << 30        // 2GB
+	// Bounds for the optional stack and process limits.
+	MinRunStack = 1 << 20 // 1MB
+	MaxRunStack = 1 << 30 // 1GB
+	MinRunProcs = 1
+	MaxRunProcs = 512
 )
 
 // RunLimits overrides a language's default CPU time (ns) and memory (bytes)
@@ -26,6 +31,14 @@ const (
 type RunLimits struct {
 	CPU    uint64
 	Memory uint64
+	// Stack is the stack size limit in bytes; zero keeps the sandbox default.
+	Stack uint64
+	// Procs is the process/thread limit; zero keeps the language default.
+	Procs uint64
+	// Args are command-line arguments passed to the program after its own
+	// arguments (validated by ValidateArgs). They travel with the limits
+	// because both are per-job run settings.
+	Args []string
 }
 
 // Effective returns the CPU and memory limits a run uses. Memory never drops
@@ -311,14 +324,18 @@ func BuildRunCmd(lang LangConfig, sourceCode, stdinData, fileID string, limits R
 func BuildRunCmdWithOptions(lang LangConfig, sourceCode, stdinData, fileID string, limits RunLimits, extraFiles map[string]string, env []string) Cmd {
 	cpu, memory := lang.Effective(limits)
 	cmd := Cmd{
-		Args:        lang.RunArgs,
+		Args:        runArgs(lang.RunArgs, limits.Args),
 		Env:         runEnv(lang.RunEnv, env),
 		Files:       []CmdFile{Stdin(stdinData), Collector("stdout", StdoutMax), Collector("stderr", StderrMax)},
 		CPULimit:    cpu,
 		ClockLimit:  ClockLimit(cpu),
 		MemoryLimit: memory,
 		ProcLimit:   lang.RunProc,
+		StackLimit:  limits.Stack,
 		CopyOut:     []string{"stdout", "stderr"},
+	}
+	if limits.Procs != 0 {
+		cmd.ProcLimit = limits.Procs
 	}
 
 	copyIn := make(map[string]CopyIn)

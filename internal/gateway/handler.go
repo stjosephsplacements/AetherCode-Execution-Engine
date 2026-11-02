@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -104,6 +105,10 @@ type Handler struct {
 	startTime              time.Time
 	workerCount            int
 	trustedProxies         []*net.IPNet
+	// available is the last language probe: language id to whether its
+	// executables exist in the sandbox. Nil until the first probe succeeds, in
+	// which case every language is accepted.
+	available atomic.Pointer[map[string]bool]
 }
 
 func NewHandler(pool *pgxpool.Pool, submitStream, runStream *queue.Stream, pubsub *queue.PubSub, judge *sandbox.Client, rdb *redis.Client, rateLimiter *ratelimit.Limiter, unauthLimiter *ratelimit.Limiter, admissionMaxQueueDepth int, workerCount int, trustedProxies []*net.IPNet) *Handler {
@@ -147,6 +152,11 @@ type executeRequest struct {
 	// Optional limits; omitted means the language defaults.
 	TimeLimitMs   *uint64 `json:"time_limit_ms"`
 	MemoryLimitKb *uint64 `json:"memory_limit_kb"`
+	// Optional run controls: stack size (KB), process/thread count, and
+	// command-line arguments passed to the program on every test.
+	StackLimitKb *uint64  `json:"stack_limit_kb"`
+	MaxProcesses *uint64  `json:"max_processes"`
+	Args         []string `json:"args,omitempty"`
 	// Optional output checker: exact (default), token, float, or custom.
 	Checker string `json:"checker"`
 	// Optional custom checker source code and language (e.g. "python", "cpp").
@@ -225,6 +235,10 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		jsonError(w, "unsupported language", http.StatusBadRequest)
 		return
 	}
+	if !h.languageAvailable(req.Language) {
+		jsonError(w, "language "+req.Language+" is not installed on this engine", http.StatusBadRequest)
+		return
+	}
 	if len(req.SourceCode) == 0 {
 		jsonError(w, "source_code is required", http.StatusBadRequest)
 		return
@@ -291,6 +305,10 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			jsonError(w, "unsupported checker_language", http.StatusBadRequest)
 			return
 		}
+		if !h.languageAvailable(req.CheckerLanguage) {
+			jsonError(w, "checker_language "+req.CheckerLanguage+" is not installed on this engine", http.StatusBadRequest)
+			return
+		}
 		req.Checker = "custom"
 	}
 	if req.InteractorCode != "" {
@@ -303,6 +321,10 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, ok := sandbox.Languages[req.InteractorLanguage]; !ok {
 			jsonError(w, "unsupported interactor_language", http.StatusBadRequest)
+			return
+		}
+		if !h.languageAvailable(req.InteractorLanguage) {
+			jsonError(w, "interactor_language "+req.InteractorLanguage+" is not installed on this engine", http.StatusBadRequest)
 			return
 		}
 	}
@@ -352,6 +374,30 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	if req.StackLimitKb != nil {
+		limits.Stack = *req.StackLimitKb * 1024
+		if limits.Stack < sandbox.MinRunStack || limits.Stack > sandbox.MaxRunStack {
+			jsonError(w, "stack_limit_kb must be between 1024 and 1048576", http.StatusBadRequest)
+			return
+		}
+	}
+	if req.MaxProcesses != nil {
+		limits.Procs = *req.MaxProcesses
+		if limits.Procs < sandbox.MinRunProcs || limits.Procs > sandbox.MaxRunProcs {
+			jsonError(w, "max_processes must be between 1 and 512", http.StatusBadRequest)
+			return
+		}
+	}
+	if err := sandbox.ValidateArgs(req.Args); err != nil {
+		jsonError(w, "args: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if len(req.Args) > 0 && sandbox.Languages[req.Language].StdinIsSource {
+		jsonError(w, "args are not supported for "+req.Language, http.StatusBadRequest)
+		return
+	}
+	limits.Args = req.Args
 
 	// Per-user rate limiting for authenticated callers.
 	if hasAuth {
@@ -607,6 +653,9 @@ type languageInfo struct {
 	DefaultCPULimitMs    uint64 `json:"default_cpu_limit_ms"`
 	DefaultMemoryLimitKb uint64 `json:"default_memory_limit_kb"`
 	RunProcLimit         uint64 `json:"run_proc_limit"`
+	// Available is false when the sandbox is missing one of the language's
+	// executables; true while no probe has completed.
+	Available bool `json:"available"`
 }
 
 func (h *Handler) HandleLanguages(w http.ResponseWriter, r *http.Request) {
@@ -625,6 +674,7 @@ func (h *Handler) HandleLanguages(w http.ResponseWriter, r *http.Request) {
 			DefaultCPULimitMs:    l.RunCPU / 1_000_000,
 			DefaultMemoryLimitKb: l.RunMem / 1024,
 			RunProcLimit:         l.RunProc,
+			Available:            h.languageAvailable(id),
 		}
 	}
 
@@ -755,4 +805,58 @@ func (h *Handler) HandleGetSubmission(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(resp) //nolint:errcheck
+}
+
+// languageAvailable reports whether the last probe found the language's
+// executables in the sandbox. Before any probe it is true, so a slow or failing
+// probe never blocks submissions.
+func (h *Handler) languageAvailable(id string) bool {
+	probed := h.available.Load()
+	if probed == nil {
+		return true
+	}
+	ok, known := (*probed)[id]
+	return ok || !known
+}
+
+// ProbeLanguages asks the sandbox which languages are installed and remembers
+// the answer. A failed probe keeps the previous answer.
+func (h *Handler) ProbeLanguages(ctx context.Context) error {
+	probeCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	available, err := h.judge.ProbeLanguages(probeCtx)
+	if err != nil {
+		return err
+	}
+	h.available.Store(&available)
+	return nil
+}
+
+// StartLanguageProbe probes now and then every interval until ctx ends, logging
+// each language that is registered but missing from the sandbox.
+func (h *Handler) StartLanguageProbe(ctx context.Context, interval time.Duration) {
+	probe := func() {
+		if err := h.ProbeLanguages(ctx); err != nil {
+			slog.Warn("language probe failed; keeping the last answer", "err", err)
+			return
+		}
+		for id, ok := range *h.available.Load() {
+			if !ok {
+				slog.Warn("language is registered but not installed in the sandbox", "language", id)
+			}
+		}
+	}
+	probe()
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				probe()
+			}
+		}
+	}()
 }
