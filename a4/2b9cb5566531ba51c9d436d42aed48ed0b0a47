@@ -1,0 +1,14 @@
+docker/go-judge/Dockerfile
+  h_05a82d06d5f9e3 11-12
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "a42b9cb5566531ba51c9d436d42aed48ed0b0a47",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
