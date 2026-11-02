@@ -42,8 +42,11 @@ func ConnectWithMaxConns(ctx context.Context, databaseURL string, maxConns int) 
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	config.MinConns = int32(max(4, min(16, maxConns/16))) //nolint:gosec // G115: bounded to 4-16 above
-	config.MaxConns = int32(maxConns)                     //nolint:gosec // G115: Config.Validate limits it to 4-2000
+	if maxConns < 4 || maxConns > 2000 {
+		return nil, fmt.Errorf("db: max connections %d outside 4-2000", maxConns)
+	}
+	config.MinConns = int32(max(4, min(16, maxConns/16)))
+	config.MaxConns = int32(maxConns)
 	// Optimize query execution by caching prepared statements and query descriptions
 	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
 	return buildPool(ctx, config, "db: connect", "db: ping")
