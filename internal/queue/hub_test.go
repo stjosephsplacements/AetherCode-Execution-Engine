@@ -82,6 +82,12 @@ func TestHub_AClientThatFallsBehindIsClosedSoItReplays(t *testing.T) {
 	defer cancel()
 	slow := ps.Subscribe(ctx, "job-d")
 	fast := ps.Subscribe(ctx, "job-e")
+	// The hub subscribes to Redis in the background: wait until it is live, or
+	// early events are lost and the buffer never overflows.
+	if err := ps.PublishEvent(ctx, eventlog.New("job-e", eventlog.EventRunning, nil)); err != nil {
+		t.Fatal(err)
+	}
+	recv(t, fast)
 
 	for i := 0; i < subscriberBuffer+5; i++ {
 		if err := ps.PublishEvent(ctx, eventlog.New("job-d", eventlog.EventRunning, nil)); err != nil {
