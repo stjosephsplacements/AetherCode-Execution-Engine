@@ -136,7 +136,7 @@ sequenceDiagram
                                               → [postgres :5432]
                                               → [redis :6379]
 ```
-See `deploy/aethercode-exec.service` and `deploy/env.example`.
+See `deploy/systemd/aethercode-exec.service` and `deploy/systemd/env.example`.
 
 ### Kubernetes (multi-replica)
 ```

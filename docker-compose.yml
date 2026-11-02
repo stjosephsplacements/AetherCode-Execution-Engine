@@ -7,7 +7,7 @@
 # The go-judge service runs with `privileged: true` because its sandbox must
 # create cgroups + namespaces. That is acceptable for a disposable dev stack on
 # a machine you control; for production use the systemd deployment
-# (deploy/aethercode-exec.service) with explicit resource limits instead.
+# (deploy/systemd/aethercode-exec.service) with explicit resource limits instead.
 
 name: aethercode
 

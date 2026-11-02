@@ -33,7 +33,7 @@ archives:
     files:
       - README.md
       - LICENSE*
-      - deploy/env.example
+      - deploy/systemd/env.example
 
 checksum:
   name_template: checksums.txt
