@@ -1,7 +1,7 @@
 # AetherCode Execution Engine
 
 <p align="center">
-  <img src="AetherCode.png" alt="AetherCode Execution Engine" width="100%">
+  <img src="docs/assets/AetherCode.png" alt="AetherCode Execution Engine" width="100%">
 </p>
 
 An enterprise-grade, high-throughput, on-premise distributed code execution and evaluation engine. AetherCode ingests untrusted code submissions over HTTP, safely runs them inside hardware-isolated Linux kernel sandboxes (cgroups v2, seccomp-bpf, network namespaces, and tmpfs overlays), and streams real-time execution lifecycle events and test verdicts back to clients via Server-Sent Events (SSE).
@@ -115,7 +115,7 @@ go build -o aethercode-exec ./cmd/stj-exec
 
 # 2. Setup configuration file
 sudo mkdir -p /etc/aethercode-exec
-sudo cp deploy/env.example /etc/aethercode-exec/env
+sudo cp deploy/systemd/env.example /etc/aethercode-exec/env
 
 # 3. Configure mandatory environment variables (database credentials, judge auth token)
 sudo nano /etc/aethercode-exec/env
@@ -130,9 +130,9 @@ For persistent host deployment under Linux systemd:
 
 ```bash
 # Copy systemd unit file and environment configuration
-sudo cp deploy/aethercode-exec.service /etc/systemd/system/
+sudo cp deploy/systemd/aethercode-exec.service /etc/systemd/system/
 sudo mkdir -p /etc/aethercode-exec
-sudo cp deploy/env.example /etc/aethercode-exec/env
+sudo cp deploy/systemd/env.example /etc/aethercode-exec/env
 
 # Reload systemd daemon and activate service
 sudo systemctl daemon-reload
@@ -161,7 +161,7 @@ go build -o /tmp/loadgen ./cmd/loadgen
 ## System Architecture
 
 <p align="center">
-  <img src="Architecture.png" alt="AetherCode Execution Engine System Architecture" width="100%">
+  <img src="docs/assets/Architecture.png" alt="AetherCode Execution Engine System Architecture" width="100%">
 </p>
 
 ### Execution Flow
@@ -207,7 +207,7 @@ Microbenchmarks demonstrate sustained 0 B/op and 0 allocs/op across `exact`, `to
 
 ### Environment Variables
 
-Configuration parameters are loaded from environment variables on startup. Reference template: `deploy/env.example`.
+Configuration parameters are loaded from environment variables on startup. Reference template: `deploy/systemd/env.example`.
 
 | Variable | Default Value | Description |
 |---|---|---|
@@ -581,7 +581,7 @@ Conducted on a dual-socket, 256-thread Linux host with 512 GB RAM and NVMe stora
 | 800 concurrent clients | 2,400 jobs | 21.6 s | 111.1 jobs/sec | 0 (0.00%) |
 | **5,000 concurrent clients** | **15,000 jobs** | **124.0 s** | **121.0 jobs/sec** | **0 (0.00%)** |
 
-Review `docs/benchmark-results.md` for in-depth percentiles (p50, p95, p99) and latency profiles.
+Review `docs/benchmarks/benchmark-results.md` for in-depth percentiles (p50, p95, p99) and latency profiles.
 
 ---
 
@@ -598,6 +598,22 @@ feature/* / fix/*  ──>  development (CI Gate)  ──>  production (Protecte
 3. **Automated Bots:** Automated workflows handle issue assignment (FCFS with active assignment limits), pull request triage, merge conflict notifications, and stale assignment reclamation.
 
 ---
+
+## Repository layout
+
+| Path | Contents |
+|---|---|
+| `cmd/stj-exec`, `cmd/loadgen` | The engine binary and the load generator |
+| `internal/` | The gateway, queue, worker, sandbox client, database layer and supporting packages |
+| `api/openapi.yaml` | The HTTP API contract |
+| `migrations/` | Embedded PostgreSQL migrations |
+| `deploy/systemd/` | The systemd unit and the environment template |
+| `deploy/k8s/` | Kustomize manifests for Kubernetes |
+| `deploy/monitoring/` | Prometheus alert rules |
+| `docker/go-judge/` | The sandbox image (go-judge and the language toolchains) |
+| `scripts/` | Smoke and end-to-end shell tests |
+| `spike/` | The go-judge spike this design started from |
+| `docs/` | Architecture, `benchmarks/` and `assets/` (README images) |
 
 ## Contributing
 

@@ -54,7 +54,7 @@ First open-source release.
 ### Verified
 
 - Zero lost jobs at up to 5,000 concurrent connections / 15,000 submissions
-  (see `docs/benchmark-results.md`).
+  (see `docs/benchmarks/benchmark-results.md`).
 
 ## [Unreleased]
 
