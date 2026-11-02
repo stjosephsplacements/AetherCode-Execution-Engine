@@ -1,0 +1,14 @@
+internal/db/db.go
+  h_05a82d06d5f9e3 45-49
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "d764a2a33c7a475b869a469f2ced39de76879d7b",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
