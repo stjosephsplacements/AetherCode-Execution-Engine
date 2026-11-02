@@ -1,0 +1,48 @@
+CHANGELOG.md
+  h_05a82d06d5f9e3 8-23
+README.md
+  h_05a82d06d5f9e3 317-319,400-403,500-508
+api/openapi.yaml
+  h_05a82d06d5f9e3 178-204,411-417,591-605
+cmd/stj-exec/main.go
+  h_05a82d06d5f9e3 159
+docker/go-judge/Dockerfile
+  h_05a82d06d5f9e3 1-5,19-22
+internal/gateway/handler.go
+  h_05a82d06d5f9e3 19,108-111,155-159,238-241,308-311,326-329,378-401,656-658,677,809-862
+internal/gateway/handler_test.go
+  h_05a82d06d5f9e3 632-718
+internal/model/submission.go
+  h_05a82d06d5f9e3 55-65
+internal/queue/pubsub.go
+  h_05a82d06d5f9e3 103-104,118-124,325-342
+internal/queue/pubsub_test.go
+  h_05a82d06d5f9e3 361,567-600
+internal/sandbox/args.go
+  h_05a82d06d5f9e3 1-43
+internal/sandbox/args_test.go
+  h_05a82d06d5f9e3 1-48
+internal/sandbox/client.go
+  h_05a82d06d5f9e3 168
+internal/sandbox/language.go
+  h_05a82d06d5f9e3 22-26,34-41,327,334,337-339
+internal/sandbox/probe.go
+  h_05a82d06d5f9e3 1-67
+internal/sandbox/probe_test.go
+  h_05a82d06d5f9e3 1-67
+internal/worker/verdict_test.go
+  h_05a82d06d5f9e3 8,36-54
+internal/worker/worker.go
+  h_05a82d06d5f9e3 357-359,481-483,580-582
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "94c987690a0262c589c9e56791c39b68bc703d24",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
