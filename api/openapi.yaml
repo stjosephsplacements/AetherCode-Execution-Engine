@@ -175,6 +175,33 @@ components:
             Per-test memory limit override in kilobytes (16384–2097152 = 16 MB–2 GB).
             Omit to use the language default.
           example: 262144
+        stack_limit_kb:
+          type: integer
+          format: int64
+          minimum: 1024
+          maximum: 1048576
+          description: |
+            Per-test stack size limit in kilobytes (1 MB–1 GB). Omit to use the sandbox default.
+          example: 65536
+        max_processes:
+          type: integer
+          format: int64
+          minimum: 1
+          maximum: 512
+          description: |
+            Per-test process/thread limit. Omit to use the language default.
+          example: 4
+        args:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+            maxLength: 1024
+          description: |
+            Command-line arguments passed to the program on every test, after the
+            program's own arguments, as separate argv entries (never through a shell).
+            Up to 16 arguments, 4 KB in total. Not supported for `sqlite`.
+          example: ["-n", "5"]
 
     ExecuteResponse:
       type: object
@@ -381,6 +408,13 @@ components:
           format: int64
           description: Maximum number of processes/threads the submission may spawn.
           example: 10
+        available:
+          type: boolean
+          description: |
+            False when the sandbox is missing one of the language's executables
+            (checked at startup and every five minutes); `POST /api/v1/execute`
+            then answers 400. True until the first check completes.
+          example: true
 
     # ── SSE event shapes ───────────────────────────────────────────────────────
 
@@ -554,6 +588,21 @@ components:
                   stderr:
                     type: string
                     description: Full stderr.
+                  run_time_ns:
+                    type: integer
+                    format: int64
+                    description: Wall-clock run time in nanoseconds.
+                  exit_status:
+                    type: integer
+                    description: The program's exit code, or the signal number when it was killed.
+                  sandbox_status:
+                    type: string
+                    description: The sandbox's status for the run, for example `Accepted`, `Nonzero Exit Status` or `Signalled`.
+                    example: Signalled
+                  message:
+                    type: string
+                    maxLength: 512
+                    description: The sandbox's explanation, for example the signal's name.
 
 paths:
 

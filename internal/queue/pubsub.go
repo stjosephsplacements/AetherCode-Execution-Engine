@@ -100,6 +100,8 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"count", len(set.Tests),
 			"cpu_ns", set.Limits.CPU,
 			"mem_bytes", set.Limits.Memory,
+			"stack_bytes", set.Limits.Stack,
+			"procs", set.Limits.Procs,
 			"checker", set.Checker,
 			"checker_code", set.CheckerCode,
 			"checker_language", set.CheckerLanguage,
@@ -112,6 +114,13 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			if filesJSON, err := json.Marshal(set.Files); err == nil {
 				fields = append(fields, "files_json", string(filesJSON))
 			}
+		}
+		if len(set.Limits.Args) > 0 {
+			argsJSON, err := json.Marshal(set.Limits.Args)
+			if err != nil {
+				return fmt.Errorf("pubsub: marshal args: %w", err)
+			}
+			fields = append(fields, "args_json", string(argsJSON))
 		}
 		if len(set.CompilerFlags) > 0 {
 			if flagsJSON, err := json.Marshal(set.CompilerFlags); err == nil {
@@ -312,6 +321,24 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 	}
 	if v := fields["mem_bytes"]; v != "" {
 		limits.Memory, _ = strconv.ParseUint(v, 10, 64)
+	}
+	// Absent on jobs enqueued before stack, process and argument controls existed.
+	if v := fields["stack_bytes"]; v != "" {
+		limits.Stack, _ = strconv.ParseUint(v, 10, 64)
+	}
+	if v := fields["procs"]; v != "" {
+		limits.Procs, _ = strconv.ParseUint(v, 10, 64)
+	}
+	if aj, ok := fields["args_json"]; ok {
+		var args []string
+		err := json.Unmarshal([]byte(aj), &args)
+		if err == nil {
+			err = sandbox.ValidateArgs(args)
+		}
+		if err != nil {
+			return TestSet{}, fmt.Errorf("pubsub: corrupt args in %s: %w", key, err)
+		}
+		limits.Args = args
 	}
 	var files map[string]string
 	if fj := fields["files_json"]; fj != "" {

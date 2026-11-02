@@ -165,6 +165,7 @@ type Cmd struct {
 	ClockLimit    uint64            `json:"clockLimit,omitempty"`
 	MemoryLimit   uint64            `json:"memoryLimit"`
 	ProcLimit     uint64            `json:"procLimit"`
+	StackLimit    uint64            `json:"stackLimit,omitempty"`
 	CopyIn        map[string]CopyIn `json:"copyIn,omitempty"`
 	CopyOut       []string          `json:"copyOut,omitempty"`
 	CopyOutCached []string          `json:"copyOutCached,omitempty"`

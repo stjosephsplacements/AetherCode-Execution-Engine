@@ -354,6 +354,9 @@ func verdictResults(results []model.TestResult) []map[string]any {
 			"cpu_time_ns":    r.CPUTimeNs,
 			"memory_bytes":   r.MemoryBytes,
 			"run_time_ns":    r.RunTimeNs,
+			"exit_status":    r.ExitStatus,
+			"sandbox_status": r.SandboxStatus,
+			"message":        db.Truncate(r.Message, 512),
 			"stdout_preview": db.Truncate(r.StdoutPreview, 256),
 			"stderr_preview": db.Truncate(r.StderrPreview, 256),
 			"stdout":         r.StdoutPreview,
@@ -475,6 +478,9 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 					CPUTimeNs:     int64(studentRes.Time),    //nolint:gosec // go-judge reports CPU time in ns
 					MemoryBytes:   int64(studentRes.Memory),  //nolint:gosec // go-judge reports memory in bytes
 					RunTimeNs:     int64(studentRes.RunTime), //nolint:gosec // go-judge reports wall-clock run time in ns
+					ExitStatus:    studentRes.ExitStatus,
+					SandboxStatus: studentRes.Status,
+					Message:       studentRes.Error,
 					StdoutPreview: studentRes.Files["stdout"],
 					StderrPreview: studentRes.Files["stderr"],
 				}
@@ -571,6 +577,9 @@ func judgeResult(r sandbox.Result, testIndex int, expectedOutput, checkerType st
 		CPUTimeNs:     int64(r.Time),    //nolint:gosec // go-judge reports CPU time in ns (non-negative)
 		MemoryBytes:   int64(r.Memory),  //nolint:gosec // go-judge reports memory usage in bytes (non-negative)
 		RunTimeNs:     int64(r.RunTime), //nolint:gosec // go-judge reports wall-clock run time in ns
+		ExitStatus:    r.ExitStatus,
+		SandboxStatus: r.Status,
+		Message:       r.Error,
 		StdoutPreview: r.Files["stdout"],
 		StderrPreview: r.Files["stderr"],
 	}

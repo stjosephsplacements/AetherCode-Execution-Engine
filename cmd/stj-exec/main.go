@@ -156,6 +156,7 @@ func main() {
 	mux := http.NewServeMux()
 	h := gateway.NewTieredHandler(pool, submitStream, runStream, bulkStream, pubsub, judge, rdb, rl, unauthRL, cfg.AdmissionMaxQueueDepth, cfg.WorkerCount, trustedProxies)
 	h.Register(mux)
+	h.StartLanguageProbe(ctx, 5*time.Minute)
 
 	var handler http.Handler = mux
 

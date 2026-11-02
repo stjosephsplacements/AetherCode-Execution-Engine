@@ -314,6 +314,9 @@ Submit code for evaluation against test cases.
 | `priority` | string | No | Priority tier: `run` (P0 default), `submit` (P1), or `bulk` (P2) |
 | `time_limit_ms` | integer | No | Per-test CPU time ceiling in milliseconds (100 to 20000) |
 | `memory_limit_kb` | integer | No | Per-test memory ceiling in kilobytes (16384 to 2097152) |
+| `stack_limit_kb` | integer | No | Per-test stack size limit in kilobytes (1024 to 1048576) |
+| `max_processes` | integer | No | Per-test process/thread limit (1 to 512); the language default otherwise |
+| `args` | array | No | Command-line arguments passed to the program on every test, as separate argv entries, never through a shell (max 16, 4 KB in total; not for `sqlite`) |
 | `idempotency_key` | string | No | Client key; duplicate submissions return the original job identifier |
 
 **Successful Response (`201 Created`):**
@@ -394,6 +397,10 @@ data: {
         "verdict": "accepted",
         "cpu_time_ns": 23000000,
         "memory_bytes": 14221312,
+        "run_time_ns": 31000000,
+        "exit_status": 0,
+        "sandbox_status": "Accepted",
+        "message": "",
         "stdout_preview": "60\n",
         "stderr_preview": ""
       },
@@ -490,6 +497,15 @@ Cancels an active or queued submission. Marks the submission record as `failed` 
 | `python` | CPython 3.12 | No | 2.0 s | 512 MB |
 | `javascript` | Node.js 24 LTS | No | 2.0 s | 512 MB |
 | `sqlite` | SQLite 3.45 (`sqlite3 -batch`) | No | 2.0 s | 512 MB |
+| `bash` | Bash | No | 2.0 s | 256 MB |
+| `rust` | rustc (`-O`) | Yes | 2.0 s | 512 MB |
+| `csharp` | Mono (`mcs`, `mono`) | Yes | 2.0 s | 512 MB (Min 128 MB) |
+| `php` | PHP CLI | No | 2.0 s | 512 MB |
+| `ruby` | Ruby | No | 2.0 s | 512 MB |
+| `kotlin` | `kotlinc` and OpenJDK 21 | Yes | 2.0 s | 512 MB (Min 256 MB) |
+| `typescript` | Bun | No | 2.0 s | 512 MB |
+
+The bundled sandbox image (`docker/go-judge`) installs every language above except `kotlin` and `typescript`, which have no Debian package. At startup, and every five minutes, the engine checks that each language's compiler and runtime exist in the sandbox: `GET /api/v1/languages` reports `available`, and `POST /api/v1/execute` answers `400` for a language that is not installed. Install `kotlinc` or `bun` in your own sandbox image to enable them.
 
 Compilation phase limits: C and C++ allow 10 s CPU and 256 MB RAM; Java allows 15 s CPU and 512 MB RAM; Go allows 30 s CPU and 1 GB RAM.
 

@@ -52,11 +52,17 @@ type Submission struct {
 }
 
 type TestResult struct {
-	TestIndex     int
-	Verdict       Verdict
-	CPUTimeNs     int64
-	MemoryBytes   int64
-	RunTimeNs     int64
+	TestIndex   int
+	Verdict     Verdict
+	CPUTimeNs   int64
+	MemoryBytes int64
+	RunTimeNs   int64
+	// ExitStatus is the program's exit code (or the signal number when it was
+	// killed), SandboxStatus go-judge's status for the run, and Message its
+	// explanation (for example the signal's name).
+	ExitStatus    int
+	SandboxStatus string
+	Message       string
 	StdoutPreview string
 	StderrPreview string
 }
