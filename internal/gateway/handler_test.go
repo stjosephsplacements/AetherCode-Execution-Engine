@@ -16,10 +16,9 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
-	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/metrics"
-
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/db"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/eventlog"
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/metrics"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/model"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/queue"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
