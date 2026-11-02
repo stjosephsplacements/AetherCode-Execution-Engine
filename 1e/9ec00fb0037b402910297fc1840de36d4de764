@@ -1,0 +1,48 @@
+CHANGELOG.md
+  h_05a82d06d5f9e3 26-29
+README.md
+  h_05a82d06d5f9e3 317,626-631
+api/openapi.yaml
+  h_05a82d06d5f9e3 178-188
+cmd/stj-exec/main.go
+  h_05a82d06d5f9e3 76,92-93
+deploy/monitoring/alerts.yml
+  h_05a82d06d5f9e3 81-120
+deploy/systemd/env.example
+  h_05a82d06d5f9e3 7-10
+internal/config/config.go
+  h_05a82d06d5f9e3 15-26,92-94,148-150
+internal/config/config_test.go
+  h_05a82d06d5f9e3 17-19,118-136
+internal/db/db.go
+  h_05a82d06d5f9e3 31-33,35-40,45-46
+internal/gateway/handler.go
+  h_05a82d06d5f9e3 180-181,359-362,526
+internal/gateway/handler_test.go
+  h_05a82d06d5f9e3 656-658
+internal/model/submission.go
+  h_05a82d06d5f9e3 93-109
+internal/queue/pubsub.go
+  h_05a82d06d5f9e3 113,383,407
+internal/queue/pubsub_test.go
+  h_05a82d06d5f9e3 575,588-590
+internal/worker/compilecache.go
+  h_05a82d06d5f9e3 4,19-22,27-29,33-103
+internal/worker/compilecache_test.go
+  h_05a82d06d5f9e3 4-7,168-323
+internal/worker/verdict_test.go
+  h_05a82d06d5f9e3 55-86
+internal/worker/worker.go
+  h_05a82d06d5f9e3 5,116,239-240,245,248,250-252,254-267,312,376,384-407
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "1e9ec00fb0037b402910297fc1840de36d4de764",
+  "prompts": {},
+  "humans": {
+    "h_05a82d06d5f9e3": {
+      "author": "Shreesh <shreesh@ALLENs-Mac-mini.local>"
+    }
+  }
+}
