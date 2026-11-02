@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -112,6 +113,7 @@ type jobSpec struct {
 	compilerFlags  []string
 	callbackURL    string
 	callbackSecret string
+	output         string
 }
 
 func isAlreadyTerminal(err error) bool {
@@ -234,29 +236,35 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		}
 
 		cacheKey := compileCacheKeyWithOptions(sub.Language, sub.SourceCode, spec.files, spec.compilerFlags)
-		if cached, hit := w.cc.get(cacheKey); hit {
-			fileID = cached
-			metrics.CompileCacheHitsTotal.Inc()
-			log.Info("compile cache hit", "fileId", fileID)
-		} else {
+		// Jobs with the same source that arrive together share one compile.
+		outcome, shared, err := w.cc.compile(jobCtx, cacheKey, func() (compileOutcome, error) {
 			compileStart := time.Now()
 			compileResult, err := w.compileWithOptions(jobCtx, lang, sub.SourceCode, spec.files, spec.compilerFlags)
 			metrics.CompileDuration.WithLabelValues(sub.Language).Observe(time.Since(compileStart).Seconds())
 			if err != nil {
-				return w.failSubmission(jobCtx, id, model.VerdictInternalError, err.Error(), log)
+				return compileOutcome{}, err
 			}
-
 			if compileResult.Status != sandbox.StatusAccepted {
-				stderr := compileResult.Files["stderr"]
-				finalVerdict = string(model.VerdictCompilationError)
-				return w.failSubmission(jobCtx, id, model.VerdictCompilationError, stderr, log)
+				return compileOutcome{failed: true, stderr: compileResult.Files["stderr"]}, nil
 			}
-
-			fileID = firstFileID(compileResult.FileIDs)
-			if fileID == "" {
-				return w.failSubmission(jobCtx, id, model.VerdictInternalError, "no cached file returned from compile", log)
+			compiledID := firstFileID(compileResult.FileIDs)
+			if compiledID == "" {
+				return compileOutcome{}, errors.New("no cached file returned from compile")
 			}
-			w.cc.put(cacheKey, fileID)
+			return compileOutcome{fileID: compiledID}, nil
+		})
+		if err != nil {
+			return w.failSubmission(jobCtx, id, model.VerdictInternalError, err.Error(), log)
+		}
+		if outcome.failed {
+			finalVerdict = string(model.VerdictCompilationError)
+			return w.failSubmission(jobCtx, id, model.VerdictCompilationError, outcome.stderr, log)
+		}
+		fileID = outcome.fileID
+		if shared {
+			metrics.CompileCacheHitsTotal.Inc()
+			log.Info("compile cache hit", "fileId", fileID)
+		} else {
 			metrics.CompileCacheMissesTotal.Inc()
 			log.Info("compiled", "fileId", fileID)
 		}
@@ -301,7 +309,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	}
 
 	metrics.JobStageSeconds.WithLabelValues("persist").Observe(time.Since(persistStart).Seconds())
-	eventResults := verdictResults(results)
+	eventResults := verdictResultsFor(results, spec.output)
 
 	effectiveCPU, effectiveMem := lang.Effective(spec.limits)
 	verdictData := map[string]any{
@@ -365,6 +373,7 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) (jobSpec, error) {
 		compilerFlags:  set.CompilerFlags,
 		callbackURL:    set.CallbackURL,
 		callbackSecret: set.CallbackSecret,
+		output:         set.Output,
 	}, nil
 }
 
@@ -372,6 +381,30 @@ func (w *Worker) loadTests(ctx context.Context, jobID string) (jobSpec, error) {
 // supplied the tests, so every test carries its full output (bounded by the
 // sandbox output limit) plus a 256-byte preview.
 func verdictResults(results []model.TestResult) []map[string]any {
+	return verdictResultsFor(results, model.OutputFull)
+}
+
+// verdictResultsFor is verdictResults with the caller's output mode: "preview"
+// drops the full stdout and stderr, "none" drops the output text altogether.
+// A large job's full output can run to megabytes per test, all of which goes
+// through Redis and every SSE client, so callers that only need verdicts can
+// leave it out.
+func verdictResultsFor(results []model.TestResult, mode string) []map[string]any {
+	out := verdictResultsFull(results)
+	if mode == model.OutputPreview || mode == model.OutputNone {
+		for _, entry := range out {
+			delete(entry, "stdout")
+			delete(entry, "stderr")
+			if mode == model.OutputNone {
+				delete(entry, "stdout_preview")
+				delete(entry, "stderr_preview")
+			}
+		}
+	}
+	return out
+}
+
+func verdictResultsFull(results []model.TestResult) []map[string]any {
 	out := make([]map[string]any, len(results))
 	for i, r := range results {
 		out[i] = map[string]any{

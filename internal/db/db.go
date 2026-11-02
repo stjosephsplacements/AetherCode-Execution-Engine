@@ -28,13 +28,22 @@ func buildPool(ctx context.Context, config *pgxpool.Config, connectPrefix, pingP
 	return pool, nil
 }
 
+// DefaultMaxConns is the main pool's size unless the caller sets one.
+const DefaultMaxConns = 128
+
 func Connect(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
+	return ConnectWithMaxConns(ctx, databaseURL, DefaultMaxConns)
+}
+
+// ConnectWithMaxConns is Connect with the pool's size set by the caller. The
+// pool keeps a sixteenth of it open (at least 4, at most 16).
+func ConnectWithMaxConns(ctx context.Context, databaseURL string, maxConns int) (*pgxpool.Pool, error) {
 	config, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("db: parse config: %w", err)
 	}
-	config.MinConns = 16
-	config.MaxConns = 128
+	config.MinConns = int32(max(4, min(16, maxConns/16))) //nolint:gosec // G115: bounded to 4-16 above
+	config.MaxConns = int32(maxConns)                     //nolint:gosec // G115: Config.Validate limits it to 4-2000
 	// Optimize query execution by caching prepared statements and query descriptions
 	config.ConnConfig.DefaultQueryExecMode = pgx.QueryExecModeCacheDescribe
 	return buildPool(ctx, config, "db: connect", "db: ping")

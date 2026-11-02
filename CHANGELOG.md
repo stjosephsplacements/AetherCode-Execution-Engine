@@ -23,6 +23,10 @@ and uses [semantic versioning](https://semver.org/).
 
 ### Changed
 
+- **One compile for the same source** — jobs with the same source, language, files and flags that arrive together share a single compile instead of each starting their own. A source that does not compile fails the same way for all of them; a sandbox error in the one compiling makes the others try for themselves.
+- **`output` mode** — `POST /api/v1/execute` accepts `output`: `full` (default), `preview` or `none`, to keep full stdout and stderr out of the event log, SSE and webhook when only verdicts are needed.
+- **Pool sizes** — `AC_DB_MAX_CONNS`, `AC_REDIS_POOL_SIZE` and `AC_REDIS_MIN_IDLE_CONNS` (defaults 128, 256, 32, as before).
+- **Latency alerts** — Prometheus rules for queue-wait p99, slow database or Redis stages, and a compile cache that almost never hits.
 - **Where the time goes** — new histograms `ac_queue_wait_seconds{stream}` (time between enqueue and a worker reading the job) and `ac_job_stage_seconds{stage}` (`claim`, `load_tests`, `run`, `persist`, `publish`), beside the existing `ac_compile_duration_seconds`.
 - **Lower latency per job** — a worker now fetches a job's tests from Redis while it claims the job in PostgreSQL, instead of one after the other.
 - **One Redis subscription per gateway** — SSE clients share a single pattern subscription instead of one subscription each. A client that falls behind is closed so it reconnects and replays from the event log; no event is dropped silently.

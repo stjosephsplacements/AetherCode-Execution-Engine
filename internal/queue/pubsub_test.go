@@ -572,6 +572,7 @@ func TestPrepareAndGetTests_RoundTripsRunControls(t *testing.T) {
 	set := TestSet{
 		Tests:  []TestData{{Input: "1", ExpectedOutput: "1"}},
 		Limits: sandbox.RunLimits{CPU: 1_000_000_000, Memory: 64 << 20, Stack: 8 << 20, Procs: 4, Args: []string{"-n", "5"}},
+		Output: "preview",
 	}
 	evt := eventlog.New("job-controls", eventlog.EventQueued, nil)
 	if err := ps.PrepareAndEnqueue(ctx, "job-controls", set, evt, "ac:submissions:run"); err != nil {
@@ -583,6 +584,9 @@ func TestPrepareAndGetTests_RoundTripsRunControls(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.Limits, set.Limits) {
 		t.Errorf("Limits = %+v, want %+v", got.Limits, set.Limits)
+	}
+	if got.Output != "preview" {
+		t.Errorf("Output = %q, want preview", got.Output)
 	}
 }
 

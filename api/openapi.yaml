@@ -175,6 +175,17 @@ components:
             Per-test memory limit override in kilobytes (16384–2097152 = 16 MB–2 GB).
             Omit to use the language default.
           example: 262144
+        output:
+          type: string
+          enum: [full, preview, none]
+          default: full
+          description: |
+            How much of each test's output the VERDICT event, the event log and the
+            webhook carry. `full` includes stdout and stderr in full (up to 8 MB per
+            test) beside the 256-byte previews. `preview` keeps only the previews and
+            `none` drops all output text. A large job's full output goes through Redis
+            and every SSE client, so callers that only need verdicts should not ask for it.
+          example: preview
         stack_limit_kb:
           type: integer
           format: int64

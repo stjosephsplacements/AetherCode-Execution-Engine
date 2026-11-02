@@ -73,7 +73,7 @@ func main() {
 	slog.Info("go-judge connected", "url", cfg.JudgeURL)
 
 	// Database
-	pool, err := db.Connect(ctx, cfg.DatabaseURL)
+	pool, err := db.ConnectWithMaxConns(ctx, cfg.DatabaseURL, cfg.DBMaxConns)
 	if err != nil {
 		slog.Error("database connection failed", "err", err)
 		os.Exit(1)
@@ -89,8 +89,8 @@ func main() {
 	// Redis
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         cfg.RedisAddr,
-		PoolSize:     256,
-		MinIdleConns: 32,
+		PoolSize:     cfg.RedisPool,
+		MinIdleConns: cfg.RedisMinIdle,
 	})
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		slog.Error("redis connection failed", "addr", cfg.RedisAddr, "err", err)

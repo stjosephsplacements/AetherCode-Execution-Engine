@@ -12,12 +12,18 @@ import (
 )
 
 type Config struct {
-	GatewayAddr   string
-	DatabaseURL   string
-	RedisAddr     string
-	JudgeURL      string
-	JudgeToken    string
-	WorkerCount   int
+	GatewayAddr string
+	DatabaseURL string
+	RedisAddr   string
+	JudgeURL    string
+	JudgeToken  string
+	WorkerCount int
+	// Connection pool sizes. The defaults suit up to about 128 concurrent
+	// database users; ingest alone can use 512 at once (see the admission
+	// semaphore), so raise DBMaxConns before raising ingest concurrency.
+	DBMaxConns    int
+	RedisPool     int
+	RedisMinIdle  int
 	StreamName    string
 	ConsumerGroup string
 	LogLevel      string
@@ -83,6 +89,9 @@ func Load() Config {
 		JudgeURL:      env("AC_JUDGE_URL", "http://127.0.0.1:5050"),
 		JudgeToken:    env("AC_JUDGE_TOKEN", ""),
 		WorkerCount:   envInt("AC_WORKER_COUNT", 8),
+		DBMaxConns:    envInt("AC_DB_MAX_CONNS", 128),
+		RedisPool:     envInt("AC_REDIS_POOL_SIZE", 256),
+		RedisMinIdle:  envInt("AC_REDIS_MIN_IDLE_CONNS", 32),
 		StreamName:    env("AC_STREAM_NAME", "ac:submissions"),
 		ConsumerGroup: env("AC_CONSUMER_GROUP", "workers"),
 		LogLevel:      env("AC_LOG_LEVEL", "info"),
@@ -136,6 +145,9 @@ func (c Config) Validate() error {
 	}
 
 	check(c.WorkerCount > 0 && c.WorkerCount <= 512, "WorkerCount must be 1-512")
+	check(c.DBMaxConns >= 4 && c.DBMaxConns <= 2000, "DBMaxConns must be 4-2000")
+	check(c.RedisPool >= 4 && c.RedisPool <= 10000, "RedisPool must be 4-10000")
+	check(c.RedisMinIdle >= 0 && c.RedisMinIdle <= c.RedisPool, "RedisMinIdle must be 0 up to RedisPool")
 	check(c.SubmitWeight > 0, "SubmitWeight must be > 0")
 	check(c.BulkWeight > 0, "BulkWeight must be > 0")
 	check(c.AdmissionMaxQueueDepth > 0, "AdmissionMaxQueueDepth must be > 0")

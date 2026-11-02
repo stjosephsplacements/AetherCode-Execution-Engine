@@ -314,6 +314,7 @@ Submit code for evaluation against test cases.
 | `priority` | string | No | Priority tier: `run` (P0 default), `submit` (P1), or `bulk` (P2) |
 | `time_limit_ms` | integer | No | Per-test CPU time ceiling in milliseconds (100 to 20000) |
 | `memory_limit_kb` | integer | No | Per-test memory ceiling in kilobytes (16384 to 2097152) |
+| `output` | string | No | How much output each test's result carries: `full` (default; stdout and stderr in full plus 256-byte previews), `preview` (previews only) or `none` |
 | `stack_limit_kb` | integer | No | Per-test stack size limit in kilobytes (1024 to 1048576) |
 | `max_processes` | integer | No | Per-test process/thread limit (1 to 512); the language default otherwise |
 | `args` | array | No | Command-line arguments passed to the program on every test, as separate argv entries, never through a shell (max 16, 4 KB in total; not for `sqlite`) |
@@ -621,6 +622,12 @@ If queue wait dominates, add capacity; if `run` dominates, look at the language 
 - Keep `AC_WORKER_COUNT` equal to go-judge's `-parallelism`; more workers than sandbox slots only queue inside go-judge.
 - On a multi-socket host, run one engine plus one go-judge per NUMA node (for example `numactl --cpunodebind=0 --membind=0` for each pair, each with its own listen address and `-parallelism` set to that node's physical cores) rather than one pair on one node. The published benchmark used a single node of a 256-thread host.
 - Raise go-judge's `-pre-fork` toward its parallelism so a burst does not wait for sandbox creation.
+
+**Pools.** The database pool defaults to 128 connections (`AC_DB_MAX_CONNS`) and the Redis pool to 256 (`AC_REDIS_POOL_SIZE`, with `AC_REDIS_MIN_IDLE_CONNS` kept open). Ingest can use up to 512 database connections at once, so under heavy submission traffic raise `AC_DB_MAX_CONNS` (and PostgreSQL's `max_connections`) first; watch `ac_job_stage_seconds{stage="claim"}` and `{stage="persist"}`.
+
+**Compiles.** Jobs with the same source, language, files and flags that arrive together share one compile (the rest wait for it), and later ones hit the compile cache (`AC_COMPILE_CACHE_TTL`). A caller that submits one job per test of the same program therefore compiles once, but a single job with all the tests is cheaper still: one queue entry, one event stream and one compile.
+
+**Output.** A job's full stdout and stderr go through Redis, the event log and every SSE client. Send `"output": "preview"` or `"none"` when only verdicts matter.
 
 **Overload.** `AC_ADMISSION_MAX_QUEUE_DEPTH` bounds how long a job can wait. A job admitted at the limit waits about depth ÷ completion rate, so lower the limit if that exceeds your verdict SLO. Rejected callers receive `Retry-After` computed from the measured completion rate.
 

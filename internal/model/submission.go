@@ -90,6 +90,23 @@ func ValidPriority(s string) bool {
 	return false
 }
 
+// Output modes: how much of each test's output the VERDICT event, the event
+// log and the webhook carry.
+const (
+	OutputFull    = "full"    // stdout and stderr in full, plus 256-byte previews (default)
+	OutputPreview = "preview" // 256-byte previews only
+	OutputNone    = "none"    // no output text at all
+)
+
+// ValidOutputMode reports whether s is an output mode. The empty string is valid and means full.
+func ValidOutputMode(s string) bool {
+	switch s {
+	case "", OutputFull, OutputPreview, OutputNone:
+		return true
+	}
+	return false
+}
+
 // ValidChecker reports whether s names a supported checker. The empty string
 // is valid and means exact. Custom checkers can be specified as "custom" or when checker code is provided.
 func ValidChecker(s string) bool {

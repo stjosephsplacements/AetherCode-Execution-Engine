@@ -110,6 +110,7 @@ func (p *PubSub) PrepareAndEnqueue(ctx context.Context, jobID string, set TestSe
 			"interactor_language", set.InteractorLanguage,
 			"callback_url", set.CallbackURL,
 			"callback_secret", callbackSecretField,
+			"output_mode", set.Output,
 		)
 		if len(set.Files) > 0 {
 			if filesJSON, err := json.Marshal(set.Files); err == nil {
@@ -379,6 +380,7 @@ func (p *PubSub) GetTests(ctx context.Context, jobID string) (TestSet, error) {
 		CompilerFlags:      compilerFlags,
 		CallbackURL:        fields["callback_url"],
 		CallbackSecret:     callbackSecret,
+		Output:             fields["output_mode"], // absent on jobs enqueued before output modes: empty means full
 	}, nil
 }
 
@@ -402,4 +404,5 @@ type TestSet struct {
 	CompilerFlags      []string          // optional whitelisted compiler flags
 	CallbackURL        string            // optional webhook notification callback URL
 	CallbackSecret     string            // optional HMAC signing secret for webhook
+	Output             string            // how much output the verdict event carries: full (empty), preview or none
 }
