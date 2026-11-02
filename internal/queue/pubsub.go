@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
@@ -168,6 +169,9 @@ type PubSub struct {
 	rdb              *redis.Client
 	wg               sync.WaitGroup
 	webhookMasterKey []byte // nil means no encryption
+
+	hubMu sync.Mutex
+	hub   *hub // the shared event subscription, started by the first Subscribe
 }
 
 // NewPubSub creates a PubSub with no webhook secret encryption (legacy / no key).
@@ -181,9 +185,13 @@ func NewPubSubWithKey(rdb *redis.Client, webhookMasterKey []byte) *PubSub {
 	return &PubSub{rdb: rdb, webhookMasterKey: webhookMasterKey}
 }
 
-// Wait blocks until all active Subscribe goroutines have exited.
-// Call after srv.Shutdown to ensure sub.Close() completes before rdb.Close().
-func (p *PubSub) Wait() { p.wg.Wait() }
+// Wait stops the shared event subscription and blocks until every Subscribe
+// goroutine has exited. Call after srv.Shutdown so the subscription is closed
+// before rdb.Close().
+func (p *PubSub) Wait() {
+	p.stopHub()
+	p.wg.Wait()
+}
 
 func channelName(jobID string) string {
 	return "ac:events:" + jobID
@@ -230,40 +238,32 @@ func (p *PubSub) GetEventLog(ctx context.Context, jobID string) ([]eventlog.Even
 	return events, nil
 }
 
-// Subscribe returns a channel that receives events for the given job.
-// Close the context to unsubscribe.
+// Subscribe returns a channel that receives events for the given job. It is
+// registered with the process-wide hub before Subscribe returns, so events
+// published after the call are never missed. Cancel ctx to unsubscribe. The
+// channel is closed when Redis is unreachable, when the client falls behind, or
+// when the PubSub is stopped; callers treat that as "reconnect and replay".
 func (p *PubSub) Subscribe(ctx context.Context, jobID string) <-chan eventlog.Event {
-	ch := make(chan eventlog.Event, 16)
-	sub := p.rdb.Subscribe(ctx, channelName(jobID))
-
+	ch := make(chan eventlog.Event, subscriberBuffer)
+	h, err := p.getHub()
+	if err != nil {
+		slog.Error("pubsub: could not open the shared subscription", "err", err)
+		close(ch)
+		return ch
+	}
+	h.add(jobID, ch)
 	p.wg.Add(1)
 	go func() {
 		defer p.wg.Done()
-		defer close(ch)
-		defer sub.Close() //nolint:errcheck // best-effort: unsubscribe when the SSE handler's goroutine exits
-
-		msgCh := sub.Channel()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case msg, ok := <-msgCh:
-				if !ok {
-					return
-				}
-				var evt eventlog.Event
-				if err := json.Unmarshal([]byte(msg.Payload), &evt); err != nil {
-					continue
-				}
-				select {
-				case ch <- evt:
-				case <-ctx.Done():
-					return
-				}
+		select {
+		case <-ctx.Done():
+			if h.remove(jobID, ch) {
+				close(ch)
 			}
+		case <-h.done:
+			// The hub has closed every client channel.
 		}
 	}()
-
 	return ch
 }
 

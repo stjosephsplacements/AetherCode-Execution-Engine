@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -99,6 +101,7 @@ func (s *Stream) Consume(ctx context.Context, consumer string, handler func(ctx 
 					continue
 				}
 
+				observeQueueWait(s.stream, msg.ID)
 				if err := handler(ctx, subID); err != nil {
 					slog.Error("queue: handler error", "submission_id", subID, "err", err)
 					continue
@@ -254,6 +257,7 @@ func (dc *DualConsumer) consumeOne(ctx context.Context, stream, consumer string,
 				return true
 			}
 
+			observeQueueWait(stream, msg.ID)
 			if err := handler(ctx, subID); err != nil {
 				slog.Error("queue: handler error", "stream", stream, "submission_id", subID, "err", err)
 				return true // consumed but not ACKed — reclaimer will pick it up
@@ -303,6 +307,7 @@ func (dc *DualConsumer) blockRead(ctx context.Context, consumer string, handler 
 				dc.ack(ctx, streamName, msg.ID)
 				continue
 			}
+			observeQueueWait(streamName, msg.ID)
 			if err := handler(ctx, subID); err != nil {
 				slog.Error("queue: handler error", "stream", streamName, "submission_id", subID, "err", err)
 				continue
@@ -536,4 +541,20 @@ func DrainLegacyStream(ctx context.Context, wg *sync.WaitGroup, rdb *redis.Clien
 			}
 		}
 	}()
+}
+
+// observeQueueWait records how long a message sat in its stream. Redis stream
+// IDs start with the millisecond they were added, so the wait needs no extra
+// field on the message.
+func observeQueueWait(stream, id string) {
+	ms, _, ok := strings.Cut(id, "-")
+	if !ok {
+		return
+	}
+	added, err := strconv.ParseInt(ms, 10, 64)
+	if err != nil {
+		return
+	}
+	wait := time.Since(time.UnixMilli(added))
+	metrics.QueueWaitSeconds.WithLabelValues(stream).Observe(max(wait, 0).Seconds())
 }

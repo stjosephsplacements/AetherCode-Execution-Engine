@@ -131,6 +131,21 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 
 	log := slog.With("submission_id", submissionID)
 
+	// The job's tests live in Redis and do not depend on the database claim, so
+	// the two round trips overlap. The result is read after the claim below.
+	type loaded struct {
+		spec jobSpec
+		err  error
+		took time.Duration
+	}
+	testsCh := make(chan loaded, 1)
+	go func() {
+		t := time.Now()
+		spec, err := w.loadTests(jobCtx, submissionID)
+		testsCh <- loaded{spec, err, time.Since(t)}
+	}()
+
+	claimStart := time.Now()
 	sub, err := db.GetSubmission(jobCtx, w.pool, id)
 	if err != nil {
 		return fmt.Errorf("worker: get submission: %w", err)
@@ -150,9 +165,12 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		return fmt.Errorf("worker: claim submission: %w", err)
 	}
 
+	metrics.JobStageSeconds.WithLabelValues("claim").Observe(time.Since(claimStart).Seconds())
+
 	// Count only jobs we've actually claimed; deferred duration also starts here.
 	metrics.ActiveWorkers.Inc()
 	defer metrics.ActiveWorkers.Dec()
+	defer metrics.JobsDrain.Complete() // a failed job frees its slot too
 	// finalVerdict is set just before each return so the deferred histogram gets labels.
 	finalVerdict := string(model.VerdictInternalError)
 	defer func() {
@@ -176,8 +194,10 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		}
 	}()
 
-	// Load the job's tests and limits from Redis
-	spec, err := w.loadTests(jobCtx, submissionID)
+	// The job's tests and limits, fetched from Redis while the claim ran.
+	loadedTests := <-testsCh
+	metrics.JobStageSeconds.WithLabelValues("load_tests").Observe(loadedTests.took.Seconds())
+	spec, err := loadedTests.spec, loadedTests.err
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("load tests: %v", err), log)
 	}
@@ -257,6 +277,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		log.Warn("failed to publish RUNNING event", "err", err)
 	}
 
+	runStart := time.Now()
 	results, totalCPU, peakMem, passed, overallVerdict, err := w.runTestsBatched(jobCtx, submissionID, lang, sub.SourceCode, spec.tests, fileID, spec.limits, spec.files, log)
 	if err != nil {
 		return w.failSubmission(jobCtx, id, model.VerdictInternalError, fmt.Sprintf("batch run: %v", err), log)
@@ -267,6 +288,8 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 	writeCtx, writeCancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer writeCancel()
 
+	metrics.JobStageSeconds.WithLabelValues("run").Observe(time.Since(runStart).Seconds())
+	persistStart := time.Now()
 	if err := db.InsertResultsAndVerdict(writeCtx, w.pool, id, results,
 		model.StatusCompleted, overallVerdict, "",
 		totalCPU, peakMem, len(spec.tests), passed); err != nil {
@@ -277,6 +300,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		return fmt.Errorf("worker: write results+verdict: %w", err)
 	}
 
+	metrics.JobStageSeconds.WithLabelValues("persist").Observe(time.Since(persistStart).Seconds())
 	eventResults := verdictResults(results)
 
 	effectiveCPU, effectiveMem := lang.Effective(spec.limits)
@@ -290,9 +314,11 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 		"applied_memory_limit_bytes": effectiveMem,
 		"results":                    eventResults,
 	}
+	publishStart := time.Now()
 	if err := w.pubsub.PublishEvent(writeCtx, eventlog.New(submissionID, eventlog.EventVerdict, verdictData)); err != nil {
 		log.Error("failed to publish VERDICT event (DB has verdict, SSE client may not)", "err", err)
 	}
+	metrics.JobStageSeconds.WithLabelValues("publish").Observe(time.Since(publishStart).Seconds())
 
 	if spec.callbackURL != "" {
 		go dispatchWebhook(context.WithoutCancel(ctx), spec.callbackURL, spec.callbackSecret, WebhookPayload{

@@ -19,6 +19,7 @@ import (
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/db"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/eventlog"
+	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/metrics"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/model"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/queue"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/sandbox"
@@ -714,5 +715,33 @@ func TestLanguageAvailability(t *testing.T) {
 		if l.ID == "python" && !l.Available {
 			t.Error("GET /languages reports python unavailable")
 		}
+	}
+}
+
+func TestBusyRetryAfterFollowsTheDrainRate(t *testing.T) {
+	_, rdb := newTestRedis(t)
+	h := NewHandler(nil, queue.NewStream(rdb, "ac:submissions:submit", "workers"), queue.NewStream(rdb, "ac:submissions:run", "workers"), nil, nil, rdb, nil, nil, 10, 8, nil)
+	ctx := context.Background()
+	for i := 0; i < 70; i++ {
+		rdb.XAdd(ctx, &goredis.XAddArgs{Stream: "ac:submissions:run", Values: map[string]any{"submission_id": fmt.Sprint(i)}})
+	}
+
+	original := metrics.JobsDrain
+	t.Cleanup(func() { metrics.JobsDrain = original })
+
+	now := time.Unix(5000, 0)
+	metrics.JobsDrain = metrics.NewDrain(func() time.Time { return now })
+	if got := h.busyRetryAfter(ctx, "ac:submissions:run"); got != 10 {
+		t.Fatalf("Retry-After with no measured rate = %d, want the old fixed 10", got)
+	}
+
+	for i := 0; i < 201; i++ {
+		metrics.JobsDrain.Complete()
+	}
+	now = now.Add(time.Second) // the rate settles at about 60 jobs/s (alpha 0.3)
+	got := h.busyRetryAfter(ctx, "ac:submissions:run")
+	// 70 queued, limit 10: it must fall by 61 jobs, about a second at 60/s.
+	if got < 1 || got > 3 {
+		t.Fatalf("Retry-After = %d, want 1 to 3 seconds for a 61-job excess at about 60 jobs/s", got)
 	}
 }

@@ -46,3 +46,23 @@ func TestRunCmdCarriesArgsStackAndProcs(t *testing.T) {
 		t.Fatalf("defaults changed: procs = %d, stack = %d", plain.ProcLimit, plain.StackLimit)
 	}
 }
+
+func TestJavaStartsLeanAndKeepsItsExecutables(t *testing.T) {
+	t.Parallel()
+	for _, id := range []string{"java", "kotlin"} {
+		run := Languages[id].RunArgs
+		if run[0] != "/usr/bin/java" {
+			t.Errorf("%s: run executable = %s, want /usr/bin/java", id, run[0])
+		}
+		joined := strings.Join(run, " ")
+		for _, flag := range []string{"-XX:+UseSerialGC", "-Xshare:auto", "-XX:TieredStopAtLevel=1"} {
+			if !strings.Contains(joined, flag) {
+				t.Errorf("%s: run args %q lack %s", id, joined, flag)
+			}
+		}
+	}
+	// -J flags must come right after javac and before the options it parses.
+	if compile := Languages["java"].CompileArgs; compile[0] != "/usr/bin/javac" || !strings.HasPrefix(compile[1], "-J") {
+		t.Errorf("javac args = %v, want the -J flags straight after the executable", compile)
+	}
+}

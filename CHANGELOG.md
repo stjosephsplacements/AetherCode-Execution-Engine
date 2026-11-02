@@ -21,6 +21,14 @@ and uses [semantic versioning](https://semver.org/).
   /api/v1/execute` answers 400 for a language that is not installed instead of
   failing the job later.
 
+### Changed
+
+- **Where the time goes** — new histograms `ac_queue_wait_seconds{stream}` (time between enqueue and a worker reading the job) and `ac_job_stage_seconds{stage}` (`claim`, `load_tests`, `run`, `persist`, `publish`), beside the existing `ac_compile_duration_seconds`.
+- **Lower latency per job** — a worker now fetches a job's tests from Redis while it claims the job in PostgreSQL, instead of one after the other.
+- **One Redis subscription per gateway** — SSE clients share a single pattern subscription instead of one subscription each. A client that falls behind is closed so it reconnects and replays from the event log; no event is dropped silently.
+- **Honest `Retry-After`** — when the queue is full, `429` carries the time the queue needs to fall under the admission limit at the measured completion rate (1 to 60 s), not a fixed 10.
+- **Leaner JVM** — `java` and `kotlin` start with the serial collector and shared class data, which also lowers the thread count of each run.
+
 ## [0.1.0] — 2026-10-04
 
 First open-source release.
