@@ -32,6 +32,7 @@ and uses [semantic versioning](https://semver.org/).
 - **One Redis subscription per gateway** — SSE clients share a single pattern subscription instead of one subscription each. A client that falls behind is closed so it reconnects and replays from the event log; no event is dropped silently.
 - **Honest `Retry-After`** — when the queue is full, `429` carries the time the queue needs to fall under the admission limit at the measured completion rate (1 to 60 s), not a fixed 10.
 - **Leaner JVM** — `java` and `kotlin` start with the serial collector and shared class data, which also lowers the thread count of each run.
+- **Rust edition 2021** — `rust` compiles with `--edition=2021` instead of rustc's default 2015, so `try_into`, `TryFrom` and `FromIterator` work without imports. `compiler_flags: ["--edition=2018"]` still works: it replaces the default rather than adding a second `--edition`, which rustc rejects.
 
 ## [0.1.0] — 2026-10-04
 
