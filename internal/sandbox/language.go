@@ -1,5 +1,10 @@
 package sandbox
 
+import (
+	"slices"
+	"strings"
+)
+
 // StdoutMax and StderrMax are the per-test output caps sent to go-judge.
 // They default to 8 MiB and 1 MiB respectively and can be overridden at
 // startup via AC_SANDBOX_STDOUT_MAX_BYTES / AC_SANDBOX_STDERR_MAX_BYTES.
@@ -63,12 +68,17 @@ func ClockLimit(cpu uint64) uint64 {
 type LangConfig struct {
 	Compiled    bool
 	CompileArgs []string
-	CompileEnv  []string
-	CompileCPU  uint64 // nanoseconds
-	CompileMem  uint64 // bytes
-	CompileProc uint64
-	SourcePath  string
-	BinaryPath  string // output path for compiled languages
+	// CompileDefaults are flags appended after CompileArgs unless a caller
+	// flag has the same name (the text before '='), which then replaces it.
+	// rustc rejects an option given twice, so a caller's --edition=2018 must
+	// replace the default edition, not follow it.
+	CompileDefaults []string
+	CompileEnv      []string
+	CompileCPU      uint64 // nanoseconds
+	CompileMem      uint64 // bytes
+	CompileProc     uint64
+	SourcePath      string
+	BinaryPath      string // output path for compiled languages
 
 	RunArgs []string
 	RunEnv  []string
@@ -217,17 +227,20 @@ var Languages = map[string]LangConfig{
 	"rust": {
 		Compiled:    true,
 		CompileArgs: []string{"/usr/bin/rustc", "-O", "-o", "/w/a.out", "/w/main.rs"},
-		CompileEnv:  []string{"PATH=/usr/bin:/bin", "HOME=/tmp"},
-		CompileCPU:  20_000_000_000,
-		CompileMem:  536_870_912,
-		CompileProc: 50,
-		SourcePath:  "/w/main.rs",
-		BinaryPath:  "/w/a.out",
-		RunArgs:     []string{"/w/a.out"},
-		RunEnv:      []string{"PATH=/usr/bin:/bin"},
-		RunCPU:      2_000_000_000,
-		RunMem:      536_870_912,
-		RunProc:     10,
+		// Without --edition rustc compiles as edition 2015, where TryFrom,
+		// TryInto and FromIterator are not in the prelude.
+		CompileDefaults: []string{"--edition=2021"},
+		CompileEnv:      []string{"PATH=/usr/bin:/bin", "HOME=/tmp"},
+		CompileCPU:      20_000_000_000,
+		CompileMem:      536_870_912,
+		CompileProc:     50,
+		SourcePath:      "/w/main.rs",
+		BinaryPath:      "/w/a.out",
+		RunArgs:         []string{"/w/a.out"},
+		RunEnv:          []string{"PATH=/usr/bin:/bin"},
+		RunCPU:          2_000_000_000,
+		RunMem:          536_870_912,
+		RunProc:         10,
 	},
 	"typescript": {
 		Compiled:   false,
@@ -265,11 +278,7 @@ func BuildCompileCmd(lang LangConfig, sourceCode string) Cmd {
 
 // BuildCompileCmdWithOptions builds the go-judge Cmd for compilation supporting extra files and compiler flags.
 func BuildCompileCmdWithOptions(lang LangConfig, sourceCode string, extraFiles map[string]string, compilerFlags []string) Cmd {
-	args := make([]string, 0, len(lang.CompileArgs)+len(compilerFlags))
-	args = append(args, lang.CompileArgs...)
-	if len(compilerFlags) > 0 {
-		args = append(args, compilerFlags...)
-	}
+	args := compileArgs(lang, compilerFlags)
 
 	copyIn := make(map[string]CopyIn, 1+len(extraFiles))
 	copyIn[lang.SourcePath] = FileContent(sourceCode)
@@ -291,6 +300,26 @@ func BuildCompileCmdWithOptions(lang LangConfig, sourceCode string, extraFiles m
 		CopyOut:       []string{"stdout", "stderr"},
 		CopyOutCached: []string{lang.BinaryPath},
 	}
+}
+
+// compileArgs returns CompileArgs, then each CompileDefaults flag the caller
+// did not override, then the caller's flags.
+func compileArgs(lang LangConfig, compilerFlags []string) []string {
+	args := make([]string, 0, len(lang.CompileArgs)+len(lang.CompileDefaults)+len(compilerFlags))
+	args = append(args, lang.CompileArgs...)
+	for _, def := range lang.CompileDefaults {
+		name := flagName(def)
+		if !slices.ContainsFunc(compilerFlags, func(f string) bool { return flagName(f) == name }) {
+			args = append(args, def)
+		}
+	}
+	return append(args, compilerFlags...)
+}
+
+// flagName is a flag without its "=value" part: "--edition=2021" → "--edition".
+func flagName(flag string) string {
+	name, _, _ := strings.Cut(flag, "=")
+	return name
 }
 
 // BuildCacheSourceCmd builds a no-op go-judge Cmd that uploads interpreted source

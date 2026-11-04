@@ -500,7 +500,7 @@ Cancels an active or queued submission. Marks the submission record as `failed` 
 | `javascript` | Node.js 24 LTS | No | 2.0 s | 512 MB |
 | `sqlite` | SQLite 3.45 (`sqlite3 -batch`) | No | 2.0 s | 512 MB |
 | `bash` | Bash | No | 2.0 s | 256 MB |
-| `rust` | rustc (`-O`) | Yes | 2.0 s | 512 MB |
+| `rust` | rustc 1.85 (`-O --edition=2021`) | Yes | 2.0 s | 512 MB |
 | `csharp` | Mono (`mcs`, `mono`) | Yes | 2.0 s | 512 MB (Min 128 MB) |
 | `php` | PHP CLI | No | 2.0 s | 512 MB |
 | `ruby` | Ruby | No | 2.0 s | 512 MB |
