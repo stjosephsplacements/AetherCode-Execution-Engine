@@ -233,9 +233,11 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let cfg = self.cfg.clone();
         Box::pin(async move {
+            let mut kind = "user";
             let decision = if let Some(id) = req.extensions().get::<Identity>() {
                 cfg.user.check(id.user_id).await
             } else if let Some(ip) = &cfg.ip {
+                kind = "ip";
                 let Some(peer) = peer_ip(&req) else {
                     if !MISSING_PEER_LOGGED.swap(true, Ordering::Relaxed) {
                         tracing::error!(
@@ -255,6 +257,10 @@ where
             if decision.allowed {
                 return inner.call(req).await;
             }
+            crate::metrics::metrics()
+                .rate_limit_rejections
+                .with_label_values(&[kind])
+                .inc();
             let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
             resp.headers_mut().insert(
                 header::RETRY_AFTER,

@@ -1,11 +1,19 @@
-//! HTTP gateway building blocks: OIDC auth, rate limiting, admission control, CORS and
-//! request logging, each as a tower layer. Layer order, outermost first: logging, CORS,
-//! auth, rate limit, admission (see the Go `cmd/stj-exec/main.go` wiring).
+//! HTTP gateway: handlers, SSE, metrics, and the tower layers they run behind (OIDC
+//! auth, rate limiting, admission control, CORS and request logging). Layer order,
+//! outermost first: logging, CORS, auth, rate limit, admission (see [`router`]).
 
 pub mod admission;
 pub mod auth;
+pub mod handlers;
+pub mod metrics;
 pub mod middleware;
 pub mod ratelimit;
+mod router;
+pub mod sse;
+
+pub use handlers::AppState;
+pub use metrics::metrics_router;
+pub use router::{router, serve};
 
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
