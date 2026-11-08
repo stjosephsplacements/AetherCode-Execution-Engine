@@ -140,6 +140,10 @@ fn parse_float(tok: &[u8]) -> Option<f64> {
         b'-' => (true, &tok[1..]),
         _ => (false, tok),
     };
+    // Go accepts one sign only; "--5" is a syntax error and compares as text.
+    if matches!(body.first(), Some(b'+' | b'-')) {
+        return None;
+    }
     let v = if body.len() > 2 && body[0] == b'0' && body[1].eq_ignore_ascii_case(&b'x') {
         parse_hex(&body[2..])?
     } else if body.eq_ignore_ascii_case(b"inf") || body.eq_ignore_ascii_case(b"infinity") {
@@ -493,6 +497,24 @@ mod tests {
             n += 1;
         }
         assert!(n > 10_000);
+    }
+
+    #[test]
+    fn doubled_sign_is_not_a_number() {
+        for s in ["+-5", "--5", "-+5", "++5"] {
+            assert!(!j(Float, s, "5"), "{s} vs 5");
+            assert!(!j(Float, "5", s), "5 vs {s}");
+            assert!(j(Float, s, s), "{s} vs itself compares as text");
+        }
+        assert!(!j(Float, "+-5", "-+5"));
+        assert!(!j(Float, "--5", "++5"));
+        let golden = include_str!("../testdata/judge.golden");
+        let hex = |s: &str| s.bytes().map(|b| format!("{b:02x}")).collect::<String>();
+        let line = format!("float {} {} wrong_answer", hex("--5"), hex("5"));
+        assert!(
+            golden.lines().any(|l| l == line),
+            "golden lacks the doubled-sign case"
+        );
     }
 
     #[test]

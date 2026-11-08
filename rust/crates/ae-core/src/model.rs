@@ -96,7 +96,8 @@ pub struct TestResult {
     pub stderr_preview: String,
 }
 
-/// Per-job run limits, stored in the `ac:tests:<job>` hash under these field names.
+/// Per-job run limits, stored in the `ac:tests:<job>` hash under these field names, except
+/// `args`, which Go stores as JSON in the hash field `args_json`.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Limits {
     /// 0 keeps the language default.
