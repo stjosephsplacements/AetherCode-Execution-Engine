@@ -179,16 +179,106 @@ async fn all_tests_of_job_run_in_parallel_bounded_by_language_hint() {
     assert!(h.sb.runs().iter().all(|b| b.len() <= 8));
     assert_eq!(h.store.row(&id(1)).results.len(), 20);
 
-    // c: unbounded, so 40 tests go out as two concurrent batches (32 + 8).
+    // c: no hint, so one batch of 32 is in flight per job; 40 tests take two rounds.
     h.sb.reset();
     let tests: Vec<(&str, &str)> = (0..40).map(|_| ("x", "x")).collect();
     h.job(&id(2), "c", "int main(){}", &tests);
-    let start = Instant::now();
     h.worker().process(delivery(&id(2))).await.unwrap();
-    assert_eq!(h.sb.max_in_flight.load(Ordering::SeqCst), 40);
+    assert_eq!(h.sb.max_in_flight.load(Ordering::SeqCst), 32);
+    assert_eq!(h.store.row(&id(2)).results.len(), 40);
+}
+
+#[test]
+fn job_width_is_bounded_without_hint() {
+    use ae_worker::runner::{MAX_JOB_WIDTH, job_width};
+    assert_eq!(job_width(None, 1000), MAX_JOB_WIDTH);
+    assert_eq!(job_width(None, 5), 5);
+    assert_eq!(job_width(Some(8), 1000), 8);
+    assert_eq!(job_width(Some(8), 3), 3);
+    assert_eq!(job_width(None, 0), 1);
+}
+
+#[tokio::test]
+async fn job_cost_matches_actual_concurrency() {
+    use ae_worker::runner::{job_cost, job_width};
+    let h = Harness::new().await;
+    *h.sb.run_delay.lock().unwrap() = Duration::from_millis(5);
+    let c = h.registry.get("c").unwrap().clone();
+    let limits = ae_sandbox::RunLimits::default();
+    for (n, lang) in [(1000usize, "c"), (20, "python")] {
+        h.sb.reset();
+        let l = h.registry.get(lang).unwrap();
+        let width = job_width(l.parallelism, n);
+        let (_, mem) = l.effective(&limits);
+        let cost = job_cost(l, &limits, n);
+        assert_eq!(cost.cpu_millis, 1_000 * width as u64);
+        assert_eq!(cost.mem_bytes, mem * width as u64);
+        let tests: Vec<(&str, &str)> = (0..n).map(|_| ("x", "x")).collect();
+        let j = id(u32::try_from(n).unwrap());
+        h.job(&j, lang, "src", &tests);
+        h.worker().process(delivery(&j)).await.unwrap();
+        assert!(
+            h.sb.max_in_flight.load(Ordering::SeqCst) <= width,
+            "{lang}: exceeded width"
+        );
+        assert_eq!(h.store.row(&j).results.len(), n);
+    }
+    let _ = c;
+}
+
+#[tokio::test(start_paused = true)]
+async fn custom_checker_calls_respect_the_job_deadline() {
+    let h = Harness::new().await;
+    let j = id(1);
+    h.job_with(
+        &j,
+        "python",
+        "print(1)",
+        &[("a", "a"), ("b", "b"), ("c", "c")],
+        |s| {
+            s.limits.cpu_ns = 100_000_000;
+            s.set.checker_code = "import sys".into();
+            s.set.checker_language = "python".into();
+        },
+    );
+    // Each sandbox call takes 9s of virtual time; three sequential checker calls
+    // overrun the job budget (3 x 1.2s + 15s).
+    *h.sb.run_delay.lock().unwrap() = Duration::from_secs(9);
+    let mut opts = h.options();
+    opts.job_timeout = Duration::from_secs(1);
+    let start = tokio::time::Instant::now();
+    h.worker_with(opts).process(delivery(&j)).await.unwrap();
     assert!(
-        start.elapsed() < Duration::from_millis(95),
-        "batches ran serially"
+        start.elapsed() < Duration::from_secs(25),
+        "ran past the deadline: {:?}",
+        start.elapsed()
+    );
+    let row = h.store.row(&j);
+    assert!(
+        row.results
+            .iter()
+            .any(|r| r.verdict == Verdict::InternalError),
+        "{:?}",
+        row.results
+    );
+}
+
+#[tokio::test]
+async fn interactive_sandbox_error_is_reported_in_the_result() {
+    let h = Harness::new().await;
+    let j = id(1);
+    h.job_with(&j, "python", "print(42)", &[("10", "42")], |s| {
+        s.set.interactor_code = "int main(){}".into();
+        s.set.interactor_language = "cpp".into();
+    });
+    h.sb.piped_fail.store(true, Ordering::SeqCst);
+    h.worker().process(delivery(&j)).await.unwrap();
+    let r = &h.store.row(&j).results[0];
+    assert_eq!(r.verdict, Verdict::InternalError);
+    assert!(
+        r.message.starts_with("interactive run failed"),
+        "{:?}",
+        r.message
     );
 }
 

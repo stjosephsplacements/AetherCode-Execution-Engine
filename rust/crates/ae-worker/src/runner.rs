@@ -1,8 +1,8 @@
 //! Test execution (Go: `runTestsBatched`, `judgeResult`, `verdictResultsFor`).
 //!
-//! Tests go to the sandbox in batches of at most [`MAX_BATCH`]. All batches of a
-//! job run concurrently under a per-job semaphore sized by the language's
-//! parallelism hint, so at most that many tests are in the sandbox at once.
+//! Tests go to the sandbox in batches of at most [`MAX_BATCH`]. Batches run
+//! concurrently under a per-job semaphore of [`job_width`] permits, so at most
+//! that many tests are in the sandbox at once.
 
 use crate::checker::{Program, evaluate_checker};
 use crate::interactor::interactive_cmds;
@@ -27,6 +27,30 @@ use tokio::time::Instant;
 
 /// Most commands sent in one sandbox call (Go: `maxBatchSize`).
 pub const MAX_BATCH: usize = 32;
+
+/// Tests of one job in the sandbox at once when the language gives no
+/// parallelism hint: one full batch.
+pub const MAX_JOB_WIDTH: usize = MAX_BATCH;
+
+/// CPU reserved per concurrently running test.
+const CPU_MILLIS_PER_TEST: u64 = 1_000;
+
+/// How many of a job's tests run at once: the language hint (else
+/// [`MAX_JOB_WIDTH`]), never more than the tests, at least one. Both the test
+/// runner and [`job_cost`] use it, so the scheduler reserves what the job uses.
+pub fn job_width(hint: Option<usize>, tests: usize) -> usize {
+    hint.unwrap_or(MAX_JOB_WIDTH).min(tests).max(1)
+}
+
+/// Scheduler cost of a job: per concurrent test, one core and the effective memory limit.
+pub fn job_cost(lang: &Language, limits: &RunLimits, tests: usize) -> crate::Cost {
+    let (_, mem) = lang.effective(limits);
+    let width = u64::try_from(job_width(lang.parallelism, tests)).unwrap_or(u64::MAX);
+    crate::Cost {
+        cpu_millis: CPU_MILLIS_PER_TEST.saturating_mul(width),
+        mem_bytes: mem.saturating_mul(width),
+    }
+}
 
 /// Slack on top of the worst-case run time for sandbox and database round trips.
 const BUDGET_SLACK: Duration = Duration::from_secs(15);
@@ -177,10 +201,9 @@ fn index(i: usize) -> i32 {
 /// # Errors
 /// A sandbox failure or a deadline hit during a non-interactive batch.
 pub(crate) async fn run_tests(spec: &RunSpec<'_>, tests: &[TestData]) -> Result<Outcome> {
-    let hint = spec.lang.parallelism;
-    let batch_size = hint.unwrap_or(MAX_BATCH).clamp(1, MAX_BATCH);
-    let permits = hint.unwrap_or(tests.len()).max(batch_size);
-    let sem = Semaphore::new(permits);
+    let width = job_width(spec.lang.parallelism, tests.len());
+    let batch_size = width.min(MAX_BATCH);
+    let sem = Semaphore::new(width);
     let progress = Mutex::new((0usize, 0usize));
     let total = tests.len();
 
@@ -287,9 +310,14 @@ async fn run_batch(spec: &RunSpec<'_>, from: usize, chunk: &[TestData]) -> Resul
             && let Some(c) = spec.custom
         {
             let stdout = r.files.get("stdout").map_or("", String::as_str);
-            tr.verdict = evaluate_checker(spec.sandbox, c, &tc.input, &tc.expected_output, stdout)
-                .await
-                .0;
+            let check = evaluate_checker(spec.sandbox, c, &tc.input, &tc.expected_output, stdout);
+            tr.verdict = match tokio::time::timeout_at(spec.deadline, check).await {
+                Ok((v, _)) => v,
+                Err(_) => {
+                    tr.message = "checker skipped: job deadline exceeded".into();
+                    Verdict::InternalError
+                }
+            };
         }
         results.push(tr);
     }
@@ -320,10 +348,19 @@ async fn run_interactive(
             &tc.expected_output,
         );
         let out = tokio::time::timeout_at(spec.deadline, spec.sandbox.run_piped(cmds, pipes)).await;
-        let rs = match out {
-            Ok(Ok(rs)) if rs.len() >= 2 => rs,
-            _ => {
-                results.push(internal_error(idx));
+        let failure = match out {
+            Ok(Ok(rs)) if rs.len() >= 2 => Ok(rs),
+            Ok(Ok(rs)) => Err(format!("sandbox returned {} results, want 2", rs.len())),
+            Ok(Err(e)) => Err(e.to_string()),
+            Err(_) => Err("job deadline exceeded".to_owned()),
+        };
+        let rs = match failure {
+            Ok(rs) => rs,
+            Err(reason) => {
+                tracing::warn!(job_id = spec.job_id, test = idx, %reason, "interactive run failed");
+                let mut tr = internal_error(idx);
+                tr.message = truncate(&format!("interactive run failed: {reason}"), 512).to_owned();
+                results.push(tr);
                 continue;
             }
         };

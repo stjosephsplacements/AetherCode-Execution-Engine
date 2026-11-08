@@ -118,10 +118,11 @@ async fn sweep_evicts_expired_entries_and_deletes_their_files() {
 async fn zero_ttl_compiles_every_time_and_releases_each_file() {
     let sb = Arc::new(FakeSandbox::default());
     let c = cache(&sb, Duration::ZERO, 1 << 30);
-    let runs = AtomicUsize::new(0);
+    let runs = Arc::new(AtomicUsize::new(0));
     for i in 0..3 {
+        let runs = runs.clone();
         let (f, hit) = c
-            .get_or_compile(key("k"), async {
+            .get_or_compile(key("k"), async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 Ok(FileId(format!("f{i}")))
             })
@@ -258,9 +259,12 @@ async fn a_cancelled_leader_does_not_strand_waiters() {
     let leader = {
         let c = c.clone();
         tokio::spawn(async move {
-            c.get_or_compile(key("k"), std::future::pending())
-                .await
-                .is_ok()
+            c.get_or_compile(key("k"), async {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                Ok(FileId("bin".into()))
+            })
+            .await
+            .is_ok()
         })
     };
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -269,17 +273,18 @@ async fn a_cancelled_leader_does_not_strand_waiters() {
         tokio::spawn(async move {
             c.get_or_compile(key("k"), async { Ok(FileId("mine".into())) })
                 .await
-                .map(|(f, _)| f.id().clone())
+                .map(|(f, hit)| (f.id().clone(), hit))
         })
     };
     tokio::time::sleep(Duration::from_millis(20)).await;
+    // The caller leaves; its compile keeps running and the waiter gets the result.
     leader.abort();
     let got = tokio::time::timeout(Duration::from_secs(2), waiter)
         .await
         .expect("waiter stranded")
         .unwrap()
         .unwrap();
-    assert_eq!(got, FileId("mine".into()));
+    assert_eq!(got, (FileId("bin".into()), true));
 }
 
 #[tokio::test]
@@ -345,4 +350,34 @@ async fn lru_keeps_the_recently_used_entry() {
         .unwrap();
     settle().await;
     assert_eq!(*sb.deleted.lock().unwrap(), vec![FileId("fb".into())]);
+}
+
+#[tokio::test]
+async fn a_compile_finishing_after_its_caller_left_is_kept_or_deleted() {
+    for ttl in [Duration::from_secs(60), Duration::ZERO] {
+        let sb = Arc::new(FakeSandbox::default());
+        let c = cache(&sb, ttl, 1 << 30);
+        let slow = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            Ok(FileId("late".into()))
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), c.get_or_compile(key("k"), slow))
+                .await
+                .is_err()
+        );
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        settle().await;
+        let deleted = sb.deleted.lock().unwrap().clone();
+        if ttl.is_zero() {
+            assert_eq!(
+                deleted,
+                vec![FileId("late".into())],
+                "leaked with the cache off"
+            );
+        } else {
+            assert_eq!(c.len(), 1, "the finished compile was lost");
+            assert!(deleted.is_empty());
+        }
+    }
 }

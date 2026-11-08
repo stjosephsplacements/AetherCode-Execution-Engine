@@ -89,7 +89,7 @@ pub async fn prepare_program(
         let compiled = cache
             .get_or_compile(
                 key,
-                compile(sandbox.as_ref(), lang, code, &BTreeMap::new(), &[]),
+                compile(sandbox.clone(), lang, code, &BTreeMap::new(), &[]),
             )
             .await;
         program.file = Some(match compiled {
@@ -102,7 +102,8 @@ pub async fn prepare_program(
     } else if !lang.placement.stdin_is_source
         && let Some(src) = lang.placement.source.as_deref()
     {
-        let upload = async { Ok(sandbox.cache_file(file_name(src), code.as_bytes()).await?) };
+        let (sb, name, bytes) = (sandbox.clone(), file_name(src).to_owned(), code.to_owned());
+        let upload = async move { Ok(sb.cache_file(&name, bytes.as_bytes()).await?) };
         match cache.get_or_compile(key, upload).await {
             Ok((f, _)) => program.file = Some(f),
             Err(e) => tracing::warn!(kind, error = %e, "upload failed; inlining the source"),
@@ -111,16 +112,30 @@ pub async fn prepare_program(
     Ok(program)
 }
 
-/// One compile; the binary's file id, or [`Error::Compile`] with the diagnostics.
-pub(crate) async fn compile(
-    sandbox: &dyn Sandbox,
+/// One compile, as an owned future (the cache runs it as its own task): the
+/// binary's file id, or [`Error::Compile`] with the diagnostics.
+pub(crate) fn compile(
+    sandbox: Arc<dyn Sandbox>,
     lang: &Language,
     source: &str,
     files: &BTreeMap<String, String>,
     flags: &[String],
+) -> impl Future<Output = Result<FileId>> + Send + 'static {
+    let cmd = compile_cmd(lang, source, files, flags);
+    let (id, binary) = (
+        lang.id.clone(),
+        lang.placement.binary.clone().unwrap_or_default(),
+    );
+    async move { run_compile(sandbox.as_ref(), cmd, &id, &binary).await }
+}
+
+async fn run_compile(
+    sandbox: &dyn Sandbox,
+    cmd: Option<Cmd>,
+    lang_id: &str,
+    binary: &str,
 ) -> Result<FileId> {
-    let cmd = compile_cmd(lang, source, files, flags)
-        .ok_or_else(|| Error::Other(format!("{} is not compiled", lang.id)))?;
+    let cmd = cmd.ok_or_else(|| Error::Other(format!("{lang_id} is not compiled")))?;
     let r = sandbox
         .run(vec![cmd])
         .await?
@@ -132,7 +147,6 @@ pub(crate) async fn compile(
             r.files.get("stderr").cloned().unwrap_or_default(),
         ));
     }
-    let binary = lang.placement.binary.as_deref().unwrap_or_default();
     r.file_ids
         .get(binary)
         .or_else(|| r.file_ids.values().next())

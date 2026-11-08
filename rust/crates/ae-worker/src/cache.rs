@@ -181,16 +181,26 @@ impl CompileCache {
     /// (and report a hit); [`Error::Compile`] is shared but not cached; any other
     /// leader error makes each waiter try again.
     ///
+    /// `compile` runs as its own task, so a caller that gives up (job deadline,
+    /// shutdown) does not lose a binary go-judge already produced: it is cached,
+    /// or deleted when caching is off. Entries expire `ttl` after creation, not
+    /// after last use.
+    ///
     /// # Errors
     /// The compile's error.
     pub async fn get_or_compile<F>(&self, key: CacheKey, compile: F) -> Result<(CachedFile, bool)>
     where
-        F: Future<Output = Result<FileId>>,
+        F: Future<Output = Result<FileId>> + Send + 'static,
     {
         let sh = &self.shared;
         if sh.ttl.is_zero() {
-            let id = compile.await?;
-            return Ok((CachedFile::owned(id, sh.sandbox.clone()), false));
+            let sandbox = sh.sandbox.clone();
+            let task =
+                tokio::spawn(async move { compile.await.map(|id| CachedFile::owned(id, sandbox)) });
+            return match task.await {
+                Ok(r) => r.map(|f| (f, false)),
+                Err(e) => Err(Error::Other(format!("compile task: {e}"))),
+            };
         }
         loop {
             let step = {
@@ -245,34 +255,41 @@ impl CompileCache {
         compile: F,
     ) -> Result<(CachedFile, bool)>
     where
-        F: Future<Output = Result<FileId>>,
+        F: Future<Output = Result<FileId>> + Send + 'static,
     {
-        // Clears the flight even if this future is dropped mid-compile.
-        let mut guard = FlightGuard {
-            cache: self,
-            key: &key,
-            tx,
-            armed: true,
-        };
-        let out = compile.await;
-        guard.armed = false;
-        match out {
-            Ok(id) => {
-                let file = CachedFile::owned(id, self.shared.sandbox.clone());
-                self.insert(&key, file.clone());
-                guard.tx.send_replace(Flight::Ready(file.clone()));
-                Ok((file, false))
+        let cache = self.clone();
+        let task = tokio::spawn(async move {
+            // Clears the flight if the compile panics.
+            let mut guard = FlightGuard {
+                cache: &cache,
+                key: &key,
+                tx,
+                armed: true,
+            };
+            let out = compile.await;
+            guard.armed = false;
+            match out {
+                Ok(id) => {
+                    let file = CachedFile::owned(id, cache.shared.sandbox.clone());
+                    cache.insert(&key, file.clone());
+                    guard.tx.send_replace(Flight::Ready(file.clone()));
+                    Ok(file)
+                }
+                Err(Error::Compile(stderr)) => {
+                    cache.shared.lock().inflight.remove(&key);
+                    guard.tx.send_replace(Flight::Failed(stderr.clone()));
+                    Err(Error::Compile(stderr))
+                }
+                Err(e) => {
+                    cache.shared.lock().inflight.remove(&key);
+                    guard.tx.send_replace(Flight::Retry);
+                    Err(e)
+                }
             }
-            Err(Error::Compile(stderr)) => {
-                self.shared.lock().inflight.remove(&key);
-                guard.tx.send_replace(Flight::Failed(stderr.clone()));
-                Err(Error::Compile(stderr))
-            }
-            Err(e) => {
-                self.shared.lock().inflight.remove(&key);
-                guard.tx.send_replace(Flight::Retry);
-                Err(e)
-            }
+        });
+        match task.await {
+            Ok(r) => r.map(|f| (f, false)),
+            Err(e) => Err(Error::Other(format!("compile task: {e}"))),
         }
     }
 

@@ -257,7 +257,8 @@ impl WebhookClient {
         for attempt in 1..=ATTEMPTS {
             match self.send_once(url, secret, &body).await {
                 Ok(status) => {
-                    tracing::info!(url, status, "webhook delivered successfully");
+                    let target = origin(url);
+                    tracing::info!(target, status, "webhook delivered successfully");
                     return true;
                 }
                 Err(WebhookError::Url(e)) => {
@@ -277,8 +278,25 @@ impl WebhookClient {
     }
 }
 
+/// `scheme://host[:port]` of a callback URL, for logs: never the path, query
+/// or credentials, which may carry caller tokens.
+fn origin(url: &str) -> String {
+    reqwest::Url::parse(url).map_or_else(
+        |_| "<invalid url>".to_owned(),
+        |u| {
+            let host = u.host_str().unwrap_or_default();
+            match u.port() {
+                Some(p) => format!("{}://{host}:{p}", u.scheme()),
+                None => format!("{}://{host}", u.scheme()),
+            }
+        },
+    )
+}
+
 /// Maps a reqwest error back to the guard that caused it, if any.
 fn classify(e: reqwest::Error) -> WebhookError {
+    // reqwest's messages embed the full URL.
+    let e = e.without_url();
     let mut src: Option<&(dyn std::error::Error + 'static)> = Some(&e);
     while let Some(s) = src {
         if let Some(w) = s.downcast_ref::<WebhookError>() {

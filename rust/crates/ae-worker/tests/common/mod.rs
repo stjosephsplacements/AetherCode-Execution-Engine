@@ -39,6 +39,7 @@ pub struct FakeSandbox {
     pub compile_fail: Mutex<Option<String>>,
     pub hook: Mutex<Option<Hook>>,
     pub panic_on_run: AtomicBool,
+    pub piped_fail: AtomicBool,
     pub missing: HashSet<String>,
     next_id: AtomicUsize,
 }
@@ -163,6 +164,12 @@ impl Sandbox for FakeSandbox {
         pipes: Vec<PipeMap>,
     ) -> std::result::Result<Vec<RunResult>, SbError> {
         self.piped.lock().unwrap().push((cmds.clone(), pipes));
+        if self.piped_fail.load(Ordering::SeqCst) {
+            return Err(SbError::Status {
+                status: 502,
+                body: "down".into(),
+            });
+        }
         Ok(cmds.iter().map(|c| self.answer(c)).collect())
     }
 

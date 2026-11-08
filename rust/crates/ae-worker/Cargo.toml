@@ -34,6 +34,8 @@ testcontainers-modules = { version = "0.11", features = ["redis", "postgres"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "test-util"] }
 uuid = { version = "1.29.1", features = ["v4"] }
 wiremock = "0.6.5"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 
 [lints]
 workspace = true

@@ -2,7 +2,7 @@
 
 use crate::cache::{CacheKey, CachedFile, CompileCache};
 use crate::checker::{Program, compile, file_name, prepare_program};
-use crate::runner::{RunSpec, job_budget, run_tests, verdict_results_for};
+use crate::runner::{RunSpec, job_budget, job_cost, run_tests, verdict_results_for};
 use crate::scheduler::{Cost, Scheduler};
 use crate::webhook::{WebhookClient, WebhookPayload};
 use crate::{AbortOnDrop, Bus, Error, Result, Store};
@@ -181,6 +181,14 @@ impl Worker {
     /// Processes one delivery and acks it once the outcome is recorded. On error
     /// the message is left pending for redelivery.
     ///
+    /// Order: one database write (`finish_with_results` / `fail_submission`),
+    /// then the VERDICT event, then the webhook marker and dispatch, then XACK.
+    /// Redelivery is idempotent: a terminal row makes the write return false and
+    /// the job is only acked. Known trade-off: a crash after the database write
+    /// but before the VERDICT publish or `mark_webhook_delivered` loses that
+    /// event and webhook, since redelivery sees the terminal row and only acks.
+    /// The verdict itself is never lost (clients can read it from the API).
+    ///
     /// # Errors
     /// A database, queue or other failure before the outcome was recorded, or the ack itself.
     pub async fn process(&self, d: Delivery) -> Result<()> {
@@ -254,7 +262,7 @@ impl Worker {
                 &version,
             );
             let build = compile(
-                inner.sandbox.as_ref(),
+                inner.sandbox.clone(),
                 &lang,
                 &sub.source_code,
                 &set.files,
@@ -511,21 +519,6 @@ impl Worker {
         .await;
         tracing::info!(job_id = id, ?verdict, "submission failed");
         Ok(())
-    }
-}
-
-/// One core per job; memory for the tests that can be in the sandbox at once.
-fn job_cost(lang: &Language, limits: &RunLimits, tests: usize) -> Cost {
-    let (_, mem) = lang.effective(limits);
-    let width = lang
-        .parallelism
-        .unwrap_or(crate::runner::MAX_BATCH)
-        .min(crate::runner::MAX_BATCH)
-        .min(tests)
-        .max(1);
-    Cost {
-        cpu_millis: 1_000,
-        mem_bytes: mem.saturating_mul(u64::try_from(width).unwrap_or(u64::MAX)),
     }
 }
 
