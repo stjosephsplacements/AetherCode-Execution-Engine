@@ -1,5 +1,5 @@
 use ae_core::model::{DEFAULT_TENANT_ID, Status, Submission, TestResult, Verdict};
-use ae_shadowdiff::{Outcome, ShadowRecord, Summary, compare};
+use ae_shadowdiff::{Outcome, ShadowRecord, Summary, compare, tests_gone_message};
 
 fn tr(i: i32, v: Verdict, cpu: i64, mem: i64) -> TestResult {
     TestResult {
@@ -98,14 +98,40 @@ fn diff_ignores_timing_fields() {
 fn diff_ignores_tests_not_found() {
     // The Go engine finished the job; the shadow run found no tests hash.
     let s = sub(Status::Completed, Some(Verdict::Accepted), 1, 1);
-    let r = rec(Verdict::InternalError, vec![], "tests not found for job");
+    let r = rec(Verdict::InternalError, vec![], &tests_gone_message("j"));
     assert_eq!(compare(&r, Some(&s), &[]), Outcome::Ignored);
-    let r = rec(
-        Verdict::InternalError,
-        vec![],
-        "corrupt: no test count in ac:tests:j",
-    );
-    assert_eq!(compare(&r, Some(&s), &[]), Outcome::Ignored);
+}
+
+#[test]
+fn compile_error_mentioning_tests_not_found_is_still_compared() {
+    let s = sub(Status::Completed, Some(Verdict::Accepted), 1, 1);
+    let go = [tr(0, Verdict::Accepted, 1, 1)];
+    for msg in [
+        "main.c:1:2: error: #error tests not found".to_owned(),
+        format!("{}\n#error", tests_gone_message("j")),
+    ] {
+        let r = rec(Verdict::CompilationError, vec![], &msg);
+        assert!(
+            matches!(compare(&r, Some(&s), &go), Outcome::Diff(_)),
+            "{msg}"
+        );
+    }
+}
+
+#[test]
+fn unreadable_and_all_pending_fail_closed() {
+    let mut u = Summary::default();
+    u.unreadable = 1;
+    assert!(u.failed(false));
+    let mut p = Summary::default();
+    p.add(&Outcome::Pending);
+    assert!(p.failed(false), "compared == 0 with pending must fail");
+    let mut ok = Summary::default();
+    ok.add(&Outcome::Match);
+    ok.add(&Outcome::Pending);
+    assert!(!ok.failed(false));
+    assert!(ok.failed(true));
+    assert!(!Summary::default().failed(true));
 }
 
 #[test]
@@ -119,6 +145,6 @@ fn pending_is_not_a_diff() {
     assert_eq!(sum.diff, 0);
     assert_eq!(
         sum.line(),
-        "compared=0 matched=0 diff=0 pending=1 ignored=0"
+        "compared=0 matched=0 diff=0 pending=1 ignored=0 unreadable=0"
     );
 }

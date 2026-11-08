@@ -167,7 +167,11 @@ dependencies = [
  "redis",
  "serde",
  "serde_json",
+ "sqlx",
+ "testcontainers",
+ "testcontainers-modules",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

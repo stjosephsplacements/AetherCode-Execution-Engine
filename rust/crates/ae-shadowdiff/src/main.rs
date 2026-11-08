@@ -3,19 +3,25 @@
 
 use ae_shadowdiff::{Outcome, ShadowRecord, Summary, compare};
 use clap::Parser;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::process::ExitCode;
 use std::time::Duration;
 
 #[derive(Parser)]
 #[command(about = "Compare ac:shadow:<job_id> records with the Go engine's Postgres results")]
 struct Args {
-    /// Redis URL, e.g. redis://127.0.0.1:6379/
-    #[arg(long)]
+    /// Redis URL, e.g. redis://127.0.0.1:6379/ (or env SHADOWDIFF_REDIS). Command-line
+    /// flags are visible in `ps`; prefer the environment variable when it holds a password.
+    #[arg(long, env = "SHADOWDIFF_REDIS", hide_env_values = true)]
     redis: String,
-    /// Postgres URL of the authoritative engine's database.
+    /// Postgres URL of the authoritative engine's database (or env SHADOWDIFF_PG, then
+    /// AC_DATABASE_URL). Must connect as the owner role or one that bypasses row-level
+    /// security: under RLS every submission looks missing and is reported as pending.
+    #[arg(long, env = "SHADOWDIFF_PG", hide_env_values = true)]
+    pg: Option<String>,
+    /// Exit 1 when any job has no finished Go result yet (and list the job ids).
     #[arg(long)]
-    pg: String,
+    fail_on_pending: bool,
     /// Only records written within this long ago (e.g. 30m, 1h).
     #[arg(long, value_parser = humantime::parse_duration)]
     since: Option<Duration>,
@@ -24,8 +30,8 @@ struct Args {
 #[tokio::main]
 async fn main() -> ExitCode {
     match run(Args::parse()).await {
-        Ok(0) => ExitCode::SUCCESS,
-        Ok(_) => ExitCode::from(1),
+        Ok(false) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::from(1),
         Err(e) => {
             eprintln!("shadowdiff: {e}");
             ExitCode::from(2)
@@ -33,17 +39,18 @@ async fn main() -> ExitCode {
     }
 }
 
-async fn run(a: Args) -> Result<usize, String> {
+async fn run(a: Args) -> Result<bool, String> {
     let client = redis::Client::open(a.redis.as_str()).map_err(|e| format!("redis url: {e}"))?;
     let mut conn = client
         .get_multiplexed_async_connection()
         .await
         .map_err(|e| format!("redis connect: {e}"))?;
-    let cfg = ae_core::Config::from_map(&HashMap::from([(
-        "AC_DATABASE_URL".to_owned(),
-        a.pg.clone(),
-    )]))
-    .map_err(|e| format!("config: {e}"))?;
+    let pg =
+        a.pg.or_else(|| std::env::var("AC_DATABASE_URL").ok())
+            .filter(|u| !u.is_empty())
+            .ok_or("no Postgres URL: pass --pg or set SHADOWDIFF_PG / AC_DATABASE_URL")?;
+    let cfg = ae_core::Config::from_map(&HashMap::from([("AC_DATABASE_URL".to_owned(), pg)]))
+        .map_err(|e| format!("config: {e}"))?;
     let db = ae_db::connect(&cfg)
         .await
         .map_err(|e| format!("postgres connect: {e}"))?;
@@ -56,6 +63,9 @@ async fn run(a: Args) -> Result<usize, String> {
     });
 
     let mut sum = Summary::default();
+    let mut seen = HashSet::new();
+    let mut pending_ids = Vec::new();
+    let mut unreadable_ids = Vec::new();
     let mut cursor: u64 = 0;
     loop {
         let (next, keys): (u64, Vec<String>) = redis::cmd("SCAN")
@@ -68,6 +78,10 @@ async fn run(a: Args) -> Result<usize, String> {
             .await
             .map_err(|e| format!("redis scan: {e}"))?;
         for key in keys {
+            // SCAN may return a key more than once.
+            if !seen.insert(key.clone()) {
+                continue;
+            }
             let body: Option<String> = redis::cmd("GET")
                 .arg(&key)
                 .query_async(&mut conn)
@@ -78,6 +92,8 @@ async fn run(a: Args) -> Result<usize, String> {
                 Ok(r) => r,
                 Err(e) => {
                     eprintln!("{key}: unreadable record: {e}");
+                    sum.unreadable += 1;
+                    unreadable_ids.push(key.trim_start_matches("ac:shadow:").to_owned());
                     continue;
                 }
             };
@@ -102,6 +118,9 @@ async fn run(a: Args) -> Result<usize, String> {
                     println!("  {l}");
                 }
             }
+            if out == Outcome::Pending {
+                pending_ids.push(rec.job_id.clone());
+            }
             sum.add(&out);
         }
         cursor = next;
@@ -109,6 +128,15 @@ async fn run(a: Args) -> Result<usize, String> {
             break;
         }
     }
+    for id in &unreadable_ids {
+        println!("UNREADABLE {id}");
+    }
+    let failed = sum.failed(a.fail_on_pending);
+    if sum.pending > 0 && (a.fail_on_pending || sum.compared == 0) {
+        for id in &pending_ids {
+            println!("PENDING {id}");
+        }
+    }
     println!("{}", sum.line());
-    Ok(sum.diff)
+    Ok(failed)
 }

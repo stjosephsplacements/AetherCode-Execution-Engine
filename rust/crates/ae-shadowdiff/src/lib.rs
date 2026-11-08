@@ -36,11 +36,20 @@ pub enum Outcome {
     Ignored,
 }
 
-/// True when the shadow run failed because the job's tests hash was already gone.
+/// The message the worker records when a job's `ac:tests:<job>` hash is gone: the worker
+/// wraps the queue's `no test count in <key>` error as `load tests: {error}`.
+#[must_use]
+pub fn tests_gone_message(job_id: &str) -> String {
+    format!("load tests: queue: no test count in ac:tests:{job_id}")
+}
+
+/// True when the shadow run failed because the job's tests hash was already gone. Matches
+/// the engine's own message exactly, so user compiler output can never trigger it.
 #[must_use]
 pub fn tests_gone(rec: &ShadowRecord) -> bool {
-    let m = rec.compile_stderr.to_lowercase();
-    rec.results.is_empty() && (m.contains("tests not found") || m.contains("no test count"))
+    rec.verdict == Verdict::InternalError
+        && rec.results.is_empty()
+        && rec.compile_stderr == tests_gone_message(&rec.job_id)
 }
 
 fn wire(v: Verdict) -> String {
@@ -113,6 +122,8 @@ pub struct Summary {
     pub diff: usize,
     pub pending: usize,
     pub ignored: usize,
+    /// Shadow records that could not be parsed; nothing was compared for them.
+    pub unreadable: usize,
 }
 
 impl Summary {
@@ -134,8 +145,18 @@ impl Summary {
     #[must_use]
     pub fn line(&self) -> String {
         format!(
-            "compared={} matched={} diff={} pending={} ignored={}",
-            self.compared, self.matched, self.diff, self.pending, self.ignored
+            "compared={} matched={} diff={} pending={} ignored={} unreadable={}",
+            self.compared, self.matched, self.diff, self.pending, self.ignored, self.unreadable
         )
+    }
+
+    /// Fail closed: a diff, an unreadable record, or a run that compared nothing while
+    /// jobs were pending (for instance `--pg` connected as an RLS-limited role that sees
+    /// no rows) is a failure; `fail_on_pending` makes any pending job one too.
+    #[must_use]
+    pub fn failed(&self, fail_on_pending: bool) -> bool {
+        self.diff > 0
+            || self.unreadable > 0
+            || self.pending > 0 && (fail_on_pending || self.compared == 0)
     }
 }

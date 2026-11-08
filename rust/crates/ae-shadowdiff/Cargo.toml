@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 ae-core = { path = "../ae-core" }
 ae-db = { path = "../ae-db" }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
 humantime = "2"
 redis = { version = "1", features = ["tokio-comp", "connection-manager"] }
 serde = { version = "1", features = ["derive"] }
@@ -26,3 +26,9 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres"] }
+testcontainers = "0.23"
+testcontainers-modules = { version = "0.11", features = ["redis", "postgres"] }
+uuid = { version = "1", features = ["v4"] }
