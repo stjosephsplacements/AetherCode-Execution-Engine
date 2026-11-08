@@ -1,0 +1,25 @@
+[package]
+name = "ae-db"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ae-core = { path = "../ae-core" }
+thiserror.workspace = true
+serde_json = "1"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
+serde = "1"
+tracing = "0.1"
+uuid = "1"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+testcontainers = "0.23"
+uuid = { version = "1", features = ["v4"] }
+testcontainers-modules = { version = "0.11", features = ["postgres"] }
+
+[lints]
+workspace = true
