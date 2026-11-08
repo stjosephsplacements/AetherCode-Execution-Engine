@@ -65,6 +65,8 @@ pub struct Config {
     pub otlp_endpoint: String,
     /// `AC_LANGUAGES_FILE`: TOML language table replacing the built-in one; empty uses the built-in.
     pub languages_file: String,
+    /// `AC_DEBUG_PORT`: port of the loopback-only metrics listener (always 127.0.0.1).
+    pub debug_port: u16,
 }
 
 impl Config {
@@ -141,6 +143,7 @@ impl Config {
             role: s("AC_ROLE", "all"),
             otlp_endpoint: s("AC_OTLP_ENDPOINT", ""),
             languages_file: s("AC_LANGUAGES_FILE", ""),
+            debug_port: num(m, "AC_DEBUG_PORT", 6060)?,
         })
     }
 
@@ -327,6 +330,7 @@ mod tests {
         assert_eq!(c.role, "all");
         assert_eq!(c.otlp_endpoint, "");
         assert_eq!(c.languages_file, "");
+        assert_eq!(c.debug_port, 6060);
         assert!(c.trusted_proxies.is_empty());
         assert!(c.webhook_master_key.is_none());
     }
@@ -386,6 +390,13 @@ mod tests {
         assert_eq!(c.max_queue_depth(), 12);
         let c = Config::from_map(&map(&[("AC_WORKERS", "3")])).unwrap();
         assert_eq!(c.max_queue_depth(), 5000);
+    }
+
+    #[test]
+    fn debug_port_parsed_and_validated() {
+        let c = Config::from_map(&map(&[("AC_DEBUG_PORT", "7070")])).unwrap();
+        assert_eq!(c.debug_port, 7070);
+        assert!(Config::from_map(&map(&[("AC_DEBUG_PORT", "70000")])).is_err());
     }
 
     #[test]

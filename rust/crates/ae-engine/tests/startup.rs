@@ -212,8 +212,17 @@ async fn sigterm_drains_then_exits_zero() {
     );
     e.signal("TERM");
     assert!(e.wait_log("shutting down", STARTUP).await);
-    // The job is still in flight; the engine must wait for it.
+    // The job is still in flight; the engine must wait for it, and keep serving HTTP
+    // (not ready, but reachable) until the drain is over.
     assert!(e.wait_exit(Duration::from_millis(500)).await.is_none());
+    assert_eq!(e.status("/readyz").await, Some(503), "readyz during drain");
+    let tok = v["stream_token"].as_str().unwrap_or_default();
+    assert_eq!(
+        e.status(&format!("/api/v1/submissions/{id}?stream_token={tok}"))
+            .await,
+        Some(200),
+        "submission GET during drain"
+    );
     drop(hold);
     let status = e
         .wait_exit(Duration::from_secs(60))
@@ -416,4 +425,46 @@ fn field(g: &HashMap<String, redis::Value>, k: &str) -> String {
         redis::Value::Int(n) => n.to_string(),
         v => format!("{v:?}"),
     }
+}
+
+#[tokio::test]
+async fn sigterm_during_startup_exits_promptly() {
+    let infra = infra().await;
+    let dead = format!("http://127.0.0.1:{}", common::free_port());
+    let mut e = spawn_engine(
+        &infra,
+        &EngineOpts {
+            args: &["--role", "all"],
+            judge_url: &dead,
+            env: &[],
+        },
+    );
+    assert!(e.wait_log("go-judge not ready", STARTUP).await);
+    e.signal("TERM");
+    let status = e
+        .wait_exit(Duration::from_secs(5))
+        .await
+        .expect("SIGTERM during the sandbox wait was ignored");
+    assert!(status.success(), "{status:?}");
+}
+
+#[tokio::test]
+async fn metrics_bind_failure_is_fatal() {
+    let infra = infra().await;
+    let judge = FakeJudge::start(&[]).await;
+    let taken = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = taken.local_addr().unwrap().port().to_string();
+    let mut e = spawn_engine(
+        &infra,
+        &EngineOpts {
+            args: &["--role", "worker"],
+            judge_url: &judge.url,
+            env: &[("AC_DEBUG_PORT", &port)],
+        },
+    );
+    let status = e
+        .wait_exit(STARTUP)
+        .await
+        .expect("engine kept running without its metrics listener");
+    assert!(!status.success(), "{status:?}");
 }

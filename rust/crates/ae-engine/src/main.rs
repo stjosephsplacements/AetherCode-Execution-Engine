@@ -8,6 +8,7 @@
 
 mod shadow;
 mod startup;
+mod supervisor;
 mod telemetry;
 
 use ae_core::Config;

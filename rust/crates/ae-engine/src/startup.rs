@@ -2,6 +2,7 @@
 
 use crate::Settings;
 use crate::shadow::{self, ShadowBus, ShadowExpiry, ShadowStore, Sink};
+use crate::supervisor::Supervisor;
 use ae_core::Config;
 use ae_gateway::AppState;
 use ae_gateway::admission::Drain;
@@ -11,6 +12,7 @@ use ae_queue::{Delivery, Queue};
 use ae_sandbox::{Cmd, CmdFile, GoJudge, REFRESH_INTERVAL, Registry, STATUS_ACCEPTED, Sandbox};
 use ae_worker::{Bus, Store, Worker, WorkerOptions};
 use futures_util::future::join_all;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -27,8 +29,6 @@ const QUEUE_SAMPLE: Duration = Duration::from_secs(15);
 const BUDGET_SAMPLE: Duration = Duration::from_secs(5);
 /// Slack on top of `AC_JOB_TIMEOUT` for one go-judge request.
 const JUDGE_SLACK: Duration = Duration::from_secs(30);
-/// Port of the loopback-only metrics listener; `AC_DEBUG_PORT` overrides it.
-const DEBUG_PORT: u16 = 6060;
 /// The pre-warm command: present in every go-judge image, needs no toolchain.
 pub const PREWARM_ARGS: [&str; 3] = ["/usr/bin/test", "-x", "/usr/bin/test"];
 
@@ -37,16 +37,6 @@ pub const PREWARM_ARGS: [&str; 3] = ["/usr/bin/test", "-x", "/usr/bin/test"];
 #[must_use]
 pub fn judge_request_timeout(cfg: &Config) -> Duration {
     cfg.job_timeout + JUDGE_SLACK
-}
-
-fn debug_addr() -> Result<SocketAddr, String> {
-    let port = match std::env::var("AC_DEBUG_PORT") {
-        Ok(v) if !v.is_empty() => v
-            .parse()
-            .map_err(|_| format!("AC_DEBUG_PORT must be a port number, got {v:?}"))?,
-        _ => DEBUG_PORT,
-    };
-    Ok(SocketAddr::from(([127, 0, 0, 1], port)))
 }
 
 /// `redis://` URL for `AC_REDIS_ADDR` with the percent-encoded password. Never log it.
@@ -123,48 +113,33 @@ pub async fn prewarm(sb: &dyn Sandbox, n: usize) {
     tracing::info!(slots = n, ok, elapsed = ?start.elapsed(), "sandbox pre-warmed");
 }
 
-/// Serves `ae_gateway::metrics_router` on the loopback address only.
-async fn spawn_debug(token: &CancellationToken) -> Result<Option<JoinHandle<()>>, String> {
-    let addr = debug_addr()?;
-    match tokio::net::TcpListener::bind(addr).await {
-        Ok(l) => {
-            tracing::info!(addr = %addr, "debug/metrics listening");
-            let stop = token.clone().cancelled_owned();
-            Ok(Some(tokio::spawn(async move {
-                if let Err(e) = axum::serve(l, ae_gateway::metrics_router())
-                    .with_graceful_shutdown(stop)
-                    .await
-                {
-                    tracing::error!(error = %e, "debug server error");
-                }
-            })))
-        }
-        Err(e) => {
-            tracing::error!(addr = %addr, error = %e, "debug server error");
-            Ok(None)
-        }
-    }
+/// Binds the loopback-only metrics listener (`127.0.0.1:AC_DEBUG_PORT`). Fatal on failure.
+async fn bind_debug(cfg: &Config) -> Result<tokio::net::TcpListener, String> {
+    let addr = SocketAddr::from(([127, 0, 0, 1], cfg.debug_port));
+    let l = tokio::net::TcpListener::bind(addr)
+        .await
+        .map_err(|e| format!("debug/metrics listen {addr}: {e}"))?;
+    tracing::info!(addr = %addr, "debug/metrics listening");
+    Ok(l)
 }
 
 /// Sets `ac_scheduler_budget_used` from the worker's scheduler every 5 s.
-fn spawn_budget_gauge(worker: Worker) -> JoinHandle<()> {
-    tokio::spawn(async move {
-        let mut tick = tokio::time::interval(BUDGET_SAMPLE);
-        loop {
-            tick.tick().await;
-            let (total, free) = (worker.scheduler().budget(), worker.scheduler().available());
-            set_scheduler_budget_used(
-                "cpu",
-                total.cpu_millis.saturating_sub(free.cpu_millis),
-                total.cpu_millis,
-            );
-            set_scheduler_budget_used(
-                "memory",
-                total.mem_bytes.saturating_sub(free.mem_bytes),
-                total.mem_bytes,
-            );
-        }
-    })
+async fn budget_gauge(worker: Worker) -> Result<(), String> {
+    let mut tick = tokio::time::interval(BUDGET_SAMPLE);
+    loop {
+        tick.tick().await;
+        let (total, free) = (worker.scheduler().budget(), worker.scheduler().available());
+        set_scheduler_budget_used(
+            "cpu",
+            total.cpu_millis.saturating_sub(free.cpu_millis),
+            total.cpu_millis,
+        );
+        set_scheduler_budget_used(
+            "memory",
+            total.mem_bytes.saturating_sub(free.mem_bytes),
+            total.mem_bytes,
+        );
+    }
 }
 
 /// Processes whatever is left in the legacy single stream (`AC_STREAM_NAME`). Stops
@@ -194,11 +169,22 @@ fn spawn_legacy_drain(queue: Queue, worker: Worker, token: CancellationToken) ->
     })
 }
 
+/// `fut`, or `None` once `token` is cancelled (a signal during startup).
+async fn or_stop<T>(token: &CancellationToken, fut: impl Future<Output = T>) -> Option<T> {
+    tokio::select! {
+        v = fut => Some(v),
+        () = token.cancelled() => None,
+    }
+}
+
 /// Runs the engine until shutdown. `Err` is fatal (non-zero exit).
 ///
+/// A signal during startup stops it at the current step and exits 0: nothing has been
+/// consumed yet, so there is nothing to drain.
+///
 /// # Errors
-/// Any startup step fails: database, migrations, Redis, sandbox unreachable, auth
-/// configuration or binding the public listener.
+/// Any startup step fails (database, migrations, Redis, sandbox unreachable, auth
+/// configuration, binding a listener), or a supervised background task exits.
 #[allow(clippy::too_many_lines)]
 pub async fn run(s: Settings) -> Result<(), String> {
     let Settings { cfg, role, shadow } = s;
@@ -211,29 +197,38 @@ pub async fn run(s: Settings) -> Result<(), String> {
         log_format = %cfg.log_format,
         "aethercode-exec starting"
     );
+    // `token`: the signal; stops startup, readiness and consumption. `http_stop`: closes
+    // the listeners, only after the workers have drained.
     let token = CancellationToken::new();
+    let http_stop = CancellationToken::new();
     let signals = spawn_signals(token.clone())?;
+    let interrupted = || {
+        tracing::info!("shutdown requested during startup");
+        Ok(())
+    };
 
     // Postgres. A shadow engine leaves the schema to the authoritative one.
-    let db = ae_db::connect(&cfg)
-        .await
-        .map_err(|e| format!("database connection failed: {e}"))?;
+    let Some(db) = or_stop(&token, ae_db::connect(&cfg)).await else {
+        return interrupted();
+    };
+    let db = db.map_err(|e| format!("database connection failed: {e}"))?;
     tracing::info!("database connected");
     if shadow {
         tracing::info!("shadow mode: migrations left to the authoritative engine");
     } else {
-        db.migrate()
-            .await
-            .map_err(|e| format!("migration failed: {e}"))?;
+        let Some(m) = or_stop(&token, db.migrate()).await else {
+            return interrupted();
+        };
+        m.map_err(|e| format!("migration failed: {e}"))?;
         tracing::info!("migrations applied");
     }
 
     // Redis.
-    let redis = redis::Client::open(redis_url(&cfg))
-        .map_err(|e| format!("redis client: {e}"))?
-        .get_connection_manager()
-        .await
-        .map_err(|e| format!("redis connection failed ({}): {e}", cfg.redis_addr))?;
+    let client = redis::Client::open(redis_url(&cfg)).map_err(|e| format!("redis client: {e}"))?;
+    let Some(redis) = or_stop(&token, client.get_connection_manager()).await else {
+        return interrupted();
+    };
+    let redis = redis.map_err(|e| format!("redis connection failed ({}): {e}", cfg.redis_addr))?;
     let (queue, sink) = if shadow {
         let sink = Sink::new(redis.clone());
         let mut qcfg = cfg.clone();
@@ -267,16 +262,15 @@ pub async fn run(s: Settings) -> Result<(), String> {
     let judge = GoJudge::with_request_timeout(&cfg, judge_request_timeout(&cfg))
         .map_err(|e| e.to_string())?;
     let sandbox: Arc<dyn Sandbox> = Arc::new(judge);
-    let registry = Arc::new(
-        Registry::load(&cfg, sandbox.as_ref())
-            .await
-            .map_err(|e| match e {
-                ae_sandbox::Error::SandboxUnreachable => {
-                    format!("go-judge unreachable at {}", cfg.judge_url)
-                }
-                e => format!("language registry: {e}"),
-            })?,
-    );
+    let Some(registry) = or_stop(&token, Registry::load(&cfg, sandbox.as_ref())).await else {
+        return interrupted();
+    };
+    let registry = Arc::new(registry.map_err(|e| match e {
+        ae_sandbox::Error::SandboxUnreachable => {
+            format!("go-judge unreachable at {}", cfg.judge_url)
+        }
+        e => format!("language registry: {e}"),
+    })?);
     let (up, down): (Vec<_>, Vec<_>) = registry.catalogue().into_iter().partition(|l| l.available);
     tracing::info!(
         available = ?up.iter().map(|l| l.id.as_str()).collect::<Vec<_>>(),
@@ -284,13 +278,25 @@ pub async fn run(s: Settings) -> Result<(), String> {
         "language self-tests done"
     );
 
-    let mut background: Vec<JoinHandle<()>> = vec![
+    let mut sup = Supervisor::default();
+    sup.adopt(
+        "language refresher",
         registry
             .clone()
             .spawn_refresher(sandbox.clone(), REFRESH_INTERVAL),
+    );
+    sup.adopt(
+        "queue sampler",
         spawn_queue_sampler(queue.clone(), QUEUE_SAMPLE),
-    ];
-    let debug = spawn_debug(&token).await?;
+    );
+    let debug = bind_debug(&cfg).await?;
+    let stop = http_stop.clone().cancelled_owned();
+    let debug = tokio::spawn(async move {
+        axum::serve(debug, ae_gateway::metrics_router())
+            .with_graceful_shutdown(stop)
+            .await
+            .map_err(|e| format!("debug server: {e}"))
+    });
 
     // Public HTTP: up for probes now, ready only after pre-warm.
     let mut http = None;
@@ -312,20 +318,25 @@ pub async fn run(s: Settings) -> Result<(), String> {
             .map_err(|e| format!("gateway listen {}: {e}", cfg.gateway_addr))?;
         tracing::info!(addr = %cfg.gateway_addr, "gateway listening");
         let app = ae_gateway::router(state.clone());
-        let stop = token.clone().cancelled_owned();
-        let t = token.clone();
+        let stop = http_stop.clone().cancelled_owned();
         http = Some(tokio::spawn(async move {
-            if let Err(e) = ae_gateway::serve(listener, app, stop).await {
-                tracing::error!(error = %e, "gateway error");
-                t.cancel();
-            }
+            ae_gateway::serve(listener, app, stop)
+                .await
+                .map_err(|e| format!("gateway: {e}"))
         }));
         Some(state)
     } else {
         None
     };
 
-    prewarm(sandbox.as_ref(), cfg.prewarm).await;
+    if or_stop(&token, prewarm(sandbox.as_ref(), cfg.prewarm))
+        .await
+        .is_none()
+    {
+        http_stop.cancel();
+        sup.shutdown().await;
+        return interrupted();
+    }
 
     // Workers.
     let mut draining: Vec<JoinHandle<()>> = Vec::new();
@@ -349,9 +360,9 @@ pub async fn run(s: Settings) -> Result<(), String> {
             }
         };
         let worker = Worker::new(store, bus, sandbox.clone(), registry.clone(), opts);
-        background.push(spawn_budget_gauge(worker.clone()));
+        sup.spawn("scheduler budget gauge", budget_gauge(worker.clone()));
         if !shadow {
-            background.push(queue.spawn_reaper(db.clone()));
+            sup.adopt("orphan reaper", queue.spawn_reaper(db.clone()));
             draining.push(spawn_legacy_drain(
                 queue.clone(),
                 worker.clone(),
@@ -366,35 +377,57 @@ pub async fn run(s: Settings) -> Result<(), String> {
     }
     tracing::info!(role = ?role, shadow, "engine ready");
 
-    token.cancelled().await;
+    // Runs until a signal, or until a listener or supervised task dies. A listener that
+    // finished is taken out so it is not awaited twice.
+    let mut http = http;
+    let mut debug = Some(debug);
+    let failure = tokio::select! {
+        () = token.cancelled() => None,
+        (name, why) = sup.failure() => Some(format!("{name}: {why}")),
+        r = finished(&mut debug) => Some(format!("metrics server: {r}")),
+        r = finished(&mut http) => Some(format!("public server: {r}")),
+    };
+    if let Some(f) = &failure {
+        tracing::error!(component = %f, "background task exited unexpectedly; shutting down");
+    }
+    token.cancel();
     tracing::info!("shutting down");
     if let Some(st) = &state {
         st.set_ready(false);
     }
-    // Workers stop reading at once and get the grace period for in-flight jobs.
+    // Workers stop reading at once and get the grace period for in-flight jobs; HTTP keeps
+    // serving (not ready) meanwhile so clients can still read results.
     tracing::info!("waiting for in-flight jobs to complete");
-    let drained = tokio::time::timeout(DRAIN_GRACE + HTTP_CLOSE, join_all(draining)).await;
-    match drained {
+    match tokio::time::timeout(DRAIN_GRACE + HTTP_CLOSE, join_all(draining)).await {
         Ok(_) => tracing::info!("all workers stopped"),
         Err(_) => tracing::warn!("worker drain timeout, proceeding with shutdown"),
     }
-    // HTTP stopped accepting at the signal; open connections get a short window.
-    if let Some(mut h) = http
-        && tokio::time::timeout(HTTP_CLOSE, &mut h).await.is_err()
-    {
-        h.abort();
+    // Now close the listeners; open connections (SSE) get a short window.
+    http_stop.cancel();
+    for h in [http, debug].into_iter().flatten() {
+        let mut h = h;
+        if tokio::time::timeout(HTTP_CLOSE, &mut h).await.is_err() {
+            h.abort();
+        }
     }
-    if let Some(mut d) = debug
-        && tokio::time::timeout(HTTP_CLOSE, &mut d).await.is_err()
-    {
-        d.abort();
-    }
-    for t in background {
-        t.abort();
-    }
+    sup.shutdown().await;
     signals.abort();
     tracing::info!("shutdown complete");
-    Ok(())
+    failure.map_or(Ok(()), |f| Err(format!("background task failed: {f}")))
+}
+
+/// Waits for a server task to finish and takes it out of `slot`; pending when empty.
+async fn finished(slot: &mut Option<JoinHandle<Result<(), String>>>) -> String {
+    let Some(h) = slot.as_mut() else {
+        return std::future::pending().await;
+    };
+    let r = h.await;
+    *slot = None;
+    match r {
+        Ok(Ok(())) => "exited".to_owned(),
+        Ok(Err(e)) => e,
+        Err(e) => e.to_string(),
+    }
 }
 
 #[cfg(test)]
