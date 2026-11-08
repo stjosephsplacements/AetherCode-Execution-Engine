@@ -37,6 +37,7 @@ dependencies = [
  "ae-core",
  "ae-db",
  "ae-gateway",
+ "ae-loadgen",
  "ae-queue",
  "ae-sandbox",
  "ae-worker",
@@ -104,6 +105,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ae-loadgen"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "humantime",
+ "rand 0.8.8",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "ae-queue"
 version = "0.1.0"
 dependencies = [
@@ -140,6 +154,20 @@ dependencies = [
  "toml",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "ae-shadowdiff"
+version = "0.1.0"
+dependencies = [
+ "ae-core",
+ "ae-db",
+ "clap",
+ "humantime",
+ "redis",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1455,6 +1483,12 @@ name = "httpdate"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df3b46402a9d5adb4c86a0cf463f42e19994e3ee891101b1841f30a545cb49a9"
+
+[[package]]
+name = "humantime"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
 
 [[package]]
 name = "hyper"

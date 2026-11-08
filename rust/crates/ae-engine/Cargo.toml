@@ -36,6 +36,7 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["f
 
 [dev-dependencies]
 ae-core = { path = "../ae-core" }
+ae-loadgen = { path = "../ae-loadgen" }
 ae-db = { path = "../ae-db" }
 ae-queue = { path = "../ae-queue" }
 axum = "0.8"
