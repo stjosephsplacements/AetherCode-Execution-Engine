@@ -120,8 +120,10 @@ fn compile_error_mentioning_tests_not_found_is_still_compared() {
 
 #[test]
 fn unreadable_and_all_pending_fail_closed() {
-    let mut u = Summary::default();
-    u.unreadable = 1;
+    let u = Summary {
+        unreadable: 1,
+        ..Summary::default()
+    };
     assert!(u.failed(false));
     let mut p = Summary::default();
     p.add(&Outcome::Pending);
