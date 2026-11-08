@@ -645,3 +645,74 @@ async fn blocking_read_delivers_every_entry_it_returns() {
     drop(tx);
     h.await.unwrap();
 }
+
+/// Appends one entry per `(stream, id)` inside a single script. A blocked reader is woken only
+/// after the script ends, so one blocking read returns every entry written here.
+async fn xadd_atomically(rdb: &mut redis::aio::MultiplexedConnection, entries: &[(&str, &str)]) {
+    let mut cmd = redis::cmd("EVAL");
+    cmd.arg("for i = 1, #KEYS do redis.call('XADD', KEYS[i], '*', 'submission_id', ARGV[i]) end")
+        .arg(entries.len());
+    for (s, _) in entries {
+        cmd.arg(*s);
+    }
+    for (_, id) in entries {
+        cmd.arg(*id);
+    }
+    let _: redis::Value = cmd.query_async(rdb).await.unwrap();
+}
+
+/// Receives `want` deliveries one at a time with a pause before each, then checks nothing extra arrives.
+async fn drain_slowly(rx: &mut mpsc::Receiver<Delivery>, want: usize) -> Vec<String> {
+    let mut got = Vec::new();
+    for _ in 0..want {
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        let d = timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .expect("deadlock: entries returned by one blocking read were not all delivered")
+            .expect("channel closed before every entry was delivered");
+        got.push(d.job_id);
+    }
+    assert!(
+        timeout(Duration::from_millis(300), rx.recv())
+            .await
+            .is_err(),
+        "an entry was delivered more than once"
+    );
+    got
+}
+
+#[tokio::test]
+async fn blocking_read_with_capacity_one_does_not_deadlock() {
+    let mut e = env().await;
+    let (tx, mut rx) = mpsc::channel(1);
+    let q = e.q.clone();
+    let h = tokio::spawn({
+        let tx = tx.clone();
+        async move { q.consume(tx).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await; // consumer is blocked on empty streams
+    xadd_atomically(&mut e.rdb, &[(SUBMIT, "s"), (RUN, "r")]).await;
+    let got = drain_slowly(&mut rx, 2).await;
+    assert_eq!(got, ["s", "r"]);
+    drop(rx);
+    drop(tx);
+    h.await.unwrap();
+}
+
+#[tokio::test]
+async fn blocking_read_with_capacity_two_and_three_streams_does_not_deadlock() {
+    let mut e = env().await;
+    let (tx, mut rx) = mpsc::channel(2);
+    let q = e.q.clone();
+    let h = tokio::spawn({
+        let tx = tx.clone();
+        async move { q.consume(tx).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await; // consumer is blocked on empty streams
+    xadd_atomically(&mut e.rdb, &[(SUBMIT, "s"), (RUN, "r"), (BULK, "b")]).await;
+    let got = drain_slowly(&mut rx, 3).await;
+    assert_eq!(got, ["s", "r", "b"]);
+    drop(rx);
+    drop(tx);
+    h.await.unwrap();
+}

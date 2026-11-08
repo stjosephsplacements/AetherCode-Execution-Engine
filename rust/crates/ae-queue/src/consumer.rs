@@ -280,15 +280,19 @@ impl Queue {
             match batch {
                 Ok(b) => {
                     // A blocking read applies COUNT per stream, so it can return one entry per
-                    // stream while only one slot is held: wait for a slot for each extra entry
-                    // so nothing read is left pending undelivered.
-                    while permits.len() < b.len() {
-                        match tx.reserve().await {
-                            Ok(p) => permits.push(p),
-                            Err(_) => return,
-                        }
-                    }
-                    for (d, p) in b.into_iter().zip(permits) {
+                    // stream while only one slot is held. Each entry is sent as soon as a slot
+                    // covers it, and no permit is held while waiting for the next slot, so the
+                    // receiver can always drain the channel. Entries unsent when the receiver
+                    // closes stay pending for the reclaimer.
+                    let mut held = permits.into_iter();
+                    for d in b {
+                        let p = match held.next() {
+                            Some(p) => p,
+                            None => match tx.reserve().await {
+                                Ok(p) => p,
+                                Err(_) => return,
+                            },
+                        };
                         p.send(d);
                     }
                 }
