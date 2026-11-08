@@ -360,6 +360,8 @@ pub struct StackOpts {
     pub max_depth: usize,
     /// Start a worker consuming the streams.
     pub worker: bool,
+    /// Extra `AC_*` settings.
+    pub env: Vec<(&'static str, &'static str)>,
 }
 
 pub struct Stack {
@@ -391,6 +393,9 @@ pub async fn stack(opts: StackOpts) -> Stack {
         ("AC_BLOCK_READ_TIMEOUT".to_owned(), "100ms".to_owned()),
         ("AC_WORKER_COUNT".to_owned(), "1".to_owned()),
     ]);
+    for (k, v) in &opts.env {
+        env.insert((*k).to_owned(), (*v).to_owned());
+    }
     if opts.max_depth > 0 {
         env.insert(
             "AC_ADMISSION_MAX_QUEUE_DEPTH".to_owned(),

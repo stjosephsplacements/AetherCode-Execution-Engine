@@ -217,6 +217,17 @@ async fn openapi_contract() {
     )
     .await; // 429
     drop(held);
+    // 429 from admission: the queue at capacity.
+    let full = stack(StackOpts {
+        max_depth: 1,
+        ..StackOpts::default()
+    })
+    .await;
+    full.queue.enqueue("ac:submissions:run", "x").await.unwrap();
+    let r = post_execute(&full, &run_body("3", ""), None).await;
+    assert_eq!(r.status(), 429);
+    let v = c.check(exec, "post", r).await;
+    assert_eq!(v["error"], "server is busy, try again later");
 
     // GET /api/v1/stream
     let s = "/api/v1/stream";

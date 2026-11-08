@@ -106,7 +106,7 @@ impl Drain {
     }
 }
 
-/// Rejection: 503 with `Retry-After`.
+/// Rejection: 429 with `Retry-After` (Go's queue-at-capacity answer).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Shed {
     pub retry_after: Duration,
@@ -115,7 +115,7 @@ pub struct Shed {
 impl IntoResponse for Shed {
     fn into_response(self) -> Response {
         let mut r = json_error(
-            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::TOO_MANY_REQUESTS,
             "server is busy, try again later",
         );
         r.headers_mut()

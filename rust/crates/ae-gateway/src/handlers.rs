@@ -109,7 +109,7 @@ impl AppState {
 
     /// The hook the engine must put in `ae_worker::WorkerOptions::observer`: it records
     /// the job metrics and calls [`Drain::complete`] for every job a worker finishes, so
-    /// the 503 `Retry-After` follows the real drain rate.
+    /// the admission 429 `Retry-After` follows the real drain rate.
     #[must_use]
     pub fn worker_observer(&self) -> Observer {
         Observer(Arc::new(metrics::WorkerMetrics::new(self.drain().clone())))
@@ -267,6 +267,7 @@ fn scaled(v: Option<u64>, unit: u64, min: u64, max: u64) -> Result<u64, ()> {
 pub async fn execute(
     State(st): State<AppState>,
     identity: Option<Extension<Identity>>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     body: Body,
 ) -> Response {
@@ -441,6 +442,20 @@ pub async fn execute(
     }
     if !req.args.is_empty() && lang.placement.stdin_is_source {
         return bad(&format!("args are not supported for {}", req.language));
+    }
+
+    // Per-user / per-IP limits run after validation, as in Go, so rejected requests
+    // never spend the caller's budget.
+    if let Err(r) = st
+        .rate_limit
+        .check(
+            identity.as_ref(),
+            peer.map(|Extension(c)| c.0.ip()),
+            &headers,
+        )
+        .await
+    {
+        return *r;
     }
 
     let stream = match req.priority.as_str() {
@@ -818,7 +833,7 @@ pub async fn health(State(st): State<AppState>) -> Response {
         &HealthResponse {
             status,
             version: env!("CARGO_PKG_VERSION"),
-            go_version: concat!("rust", env!("CARGO_PKG_RUST_VERSION")),
+            go_version: env!("AE_RUSTC_VERSION"),
             uptime_seconds: st.started.elapsed().as_secs(),
             checks,
             sandbox_version: sandbox_version.unwrap_or_default(),

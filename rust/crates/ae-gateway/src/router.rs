@@ -8,17 +8,16 @@ use axum::routing::{get, post};
 use std::future::Future;
 use std::net::SocketAddr;
 
-/// Every public route. Layers, outermost first: request log, HTTP metrics, CORS, auth,
-/// rate limit; admission runs inside the execute handler, where the priority stream
-/// and the job's cost are known. `/livez` and `/readyz` are public (probes carry no
+/// Every public route. Layers, outermost first: request log, HTTP metrics, CORS, auth.
+/// As in Go, only execute is rate limited, and it is done inside the handler after
+/// validation and before admission, where the priority stream and cost are known. `/livez` and `/readyz` are public (probes carry no
 /// token); `/metrics` is only on [`metrics::metrics_router`].
 pub fn router(state: AppState) -> Router {
     let layers = tower::ServiceBuilder::new()
         .layer(RequestLogLayer::new())
         .layer(axum::middleware::from_fn(metrics::record_http))
         .layer(state.cors.clone())
-        .layer(state.auth.clone())
-        .layer(state.rate_limit.clone());
+        .layer(state.auth.clone());
     Router::new()
         .route("/api/v1/execute", post(handlers::execute))
         .route("/api/v1/stream", get(sse::stream))

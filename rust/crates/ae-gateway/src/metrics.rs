@@ -227,7 +227,7 @@ pub fn metrics_router() -> Router {
 /// Records `ac_http_requests_total` and `ac_http_request_duration_seconds` with the route
 /// label from [`crate::middleware::normalize_path`] (Go's logging middleware).
 pub async fn record_http(req: Request, next: Next) -> Response {
-    let method = req.method().as_str().to_owned();
+    let method = method_label(req.method()).to_owned();
     let path = crate::middleware::normalize_path(req.uri().path());
     let start = Instant::now();
     let resp = next.run(req).await;
@@ -239,6 +239,24 @@ pub async fn record_http(req: Request, next: Next) -> Response {
         .with_label_values(&[method.as_str(), path])
         .observe(start.elapsed().as_secs_f64());
     resp
+}
+
+/// Standard methods verbatim, anything else `other`, so callers cannot grow the label set.
+#[must_use]
+pub fn method_label(m: &axum::http::Method) -> &'static str {
+    use axum::http::Method;
+    match *m {
+        Method::GET => "GET",
+        Method::POST => "POST",
+        Method::PUT => "PUT",
+        Method::DELETE => "DELETE",
+        Method::PATCH => "PATCH",
+        Method::HEAD => "HEAD",
+        Method::OPTIONS => "OPTIONS",
+        Method::CONNECT => "CONNECT",
+        Method::TRACE => "TRACE",
+        _ => "other",
+    }
 }
 
 /// The worker hook: job metrics plus one [`Drain::complete`] per finished job, which

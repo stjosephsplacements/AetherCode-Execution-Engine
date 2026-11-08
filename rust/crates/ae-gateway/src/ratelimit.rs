@@ -233,40 +233,62 @@ where
         let mut inner = std::mem::replace(&mut self.inner, clone);
         let cfg = self.cfg.clone();
         Box::pin(async move {
-            let mut kind = "user";
-            let decision = if let Some(id) = req.extensions().get::<Identity>() {
-                cfg.user.check(id.user_id).await
-            } else if let Some(ip) = &cfg.ip {
-                kind = "ip";
-                let Some(peer) = peer_ip(&req) else {
-                    if !MISSING_PEER_LOGGED.swap(true, Ordering::Relaxed) {
-                        tracing::error!(
-                            "ratelimit: request has no peer address; serve with into_make_service_with_connect_info::<SocketAddr>()"
-                        );
-                    }
-                    return Ok(json_error(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal error",
-                    ));
-                };
-                let client = remote_ip(Some(peer), req.headers(), &cfg.trusted);
-                ip.check_ip(&client).await
-            } else {
-                ALLOW
-            };
-            if decision.allowed {
-                return inner.call(req).await;
+            let identity = req.extensions().get::<Identity>().cloned();
+            let peer = peer_ip(&req);
+            match cfg.check(identity.as_ref(), peer, req.headers()).await {
+                Ok(()) => inner.call(req).await,
+                Err(resp) => Ok(*resp),
             }
-            crate::metrics::metrics()
-                .rate_limit_rejections
-                .with_label_values(&[kind])
-                .inc();
-            let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
-            resp.headers_mut().insert(
-                header::RETRY_AFTER,
-                retry_after_header(decision.retry_after),
-            );
-            Ok(resp)
         })
+    }
+}
+
+impl RateLimitLayer {
+    /// Go's in-handler check: the per-user limit for an [`Identity`], else the per-IP
+    /// limit when configured. `peer` is the `ConnectInfo` address; without it the IP
+    /// limiter cannot key the caller, so the request fails with 500 (logged once).
+    ///
+    /// # Errors
+    /// 429 with `Retry-After` when limited; 500 without a peer address.
+    pub async fn check(
+        &self,
+        identity: Option<&Identity>,
+        peer: Option<std::net::IpAddr>,
+        headers: &axum::http::HeaderMap,
+    ) -> Result<(), Box<Response>> {
+        let mut kind = "user";
+        let decision = if let Some(id) = identity {
+            self.user.check(id.user_id).await
+        } else if let Some(ip) = &self.ip {
+            kind = "ip";
+            let Some(peer) = peer else {
+                if !MISSING_PEER_LOGGED.swap(true, Ordering::Relaxed) {
+                    tracing::error!(
+                        "ratelimit: request has no peer address; serve with into_make_service_with_connect_info::<SocketAddr>()"
+                    );
+                }
+                return Err(Box::new(json_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal error",
+                )));
+            };
+            let client = remote_ip(Some(peer), headers, &self.trusted);
+            ip.check_ip(&client).await
+        } else {
+            ALLOW
+        };
+        if decision.allowed {
+            return Ok(());
+        }
+        crate::metrics::metrics()
+            .rate_limit_rejections
+            .with_label_values(&[kind])
+            .inc();
+        let mut resp = json_error(StatusCode::TOO_MANY_REQUESTS, "rate limit exceeded");
+        resp.headers_mut().insert(
+            header::RETRY_AFTER,
+            retry_after_header(decision.retry_after),
+        );
+        Err(Box::new(resp))
     }
 }

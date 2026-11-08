@@ -68,7 +68,11 @@ async fn health_reports_checks_versions_workers_and_queues() {
     assert_eq!(v["workers"]["configured"], 1);
     assert_eq!(v["workers"]["active"], 0);
     assert!(v["uptime_seconds"].as_u64().is_some());
-    assert!(v["go_version"].is_string());
+    assert!(
+        v["go_version"].as_str().unwrap().starts_with("rustc "),
+        "the compiler version, not the MSRV: {}",
+        v["go_version"]
+    );
     assert_eq!(v["queues"]["ac:submissions:submit"], 5);
     assert_eq!(v["queues"]["ac:submissions:run"], 3);
 
@@ -583,7 +587,7 @@ async fn admission_sheds_with_retry_after_from_drain_rate() {
     );
     assert_eq!(
         error_of(r).await,
-        (503, "server is busy, try again later".into())
+        (429, "server is busy, try again later".into())
     );
     // The submit stream is admitted separately.
     let r = post_execute(
@@ -676,4 +680,76 @@ async fn livez_readyz_and_metrics() {
         text.contains(r#"ac_http_requests_total{code="201",method="POST",path="/api/v1/execute"}"#),
         "{text}"
     );
+}
+
+#[tokio::test]
+async fn only_execute_is_rate_limited() {
+    let st = stack(StackOpts {
+        env: vec![
+            ("AC_RATE_LIMIT_UNAUTH_PER_MINUTE", "2"),
+            ("AC_RATE_LIMIT_UNAUTH_BURST", "2"),
+        ],
+        ..StackOpts::default()
+    })
+    .await;
+    // Invalid requests are rejected before the limiter and spend no budget (Go order).
+    for _ in 0..5 {
+        let r = post_execute(&st, r#"{"language":"python","source_code":"x"}"#, None).await;
+        assert_eq!(r.status(), 400);
+    }
+    let r = post_execute(&st, &run_body("3", ""), None).await;
+    assert_eq!(r.status(), 201);
+    let v: Value = r.json().await.unwrap();
+    let (id, tok) = (
+        v["job_id"].as_str().unwrap().to_owned(),
+        v["stream_token"].as_str().unwrap().to_owned(),
+    );
+    st.queue
+        .publish(&ae_core::eventlog::Event::new(
+            &id,
+            EventType::Verdict,
+            Some(serde_json::json!({"verdict": "accepted"})),
+        ))
+        .await
+        .unwrap();
+    let paths = [
+        format!("/api/v1/stream?job_id={id}&stream_token={tok}"),
+        format!("/api/v1/submissions/{id}?stream_token={tok}"),
+        "/api/v1/health".to_owned(),
+        "/api/v1/languages".to_owned(),
+        "/livez".to_owned(),
+        "/readyz".to_owned(),
+    ];
+    for _ in 0..4 {
+        for p in &paths {
+            let r = http().get(format!("{}{p}", st.url)).send().await.unwrap();
+            assert_ne!(r.status(), 429, "{p} must not be rate limited");
+            let _ = r.bytes().await;
+        }
+    }
+    assert_eq!(
+        post_execute(&st, &run_body("3", ""), None).await.status(),
+        201
+    );
+    let r = post_execute(&st, &run_body("3", ""), None).await;
+    assert!(r.headers().contains_key("retry-after"));
+    assert_eq!(error_of(r).await, (429, "rate limit exceeded".into()));
+}
+
+#[tokio::test]
+async fn unknown_methods_are_labelled_other() {
+    let st = stack(StackOpts::default()).await;
+    let m = reqwest::Method::from_bytes(b"BREW").unwrap();
+    let _ = http()
+        .request(m, format!("{}/livez", st.url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        ae_gateway::metrics::method_label(&axum::http::Method::from_bytes(b"BREW").unwrap()),
+        "other"
+    );
+    let text = String::from_utf8(ae_gateway::metrics::metrics().render()).unwrap();
+    assert!(!text.contains("BREW"), "raw method leaked into labels");
+    assert!(text.contains(r#"method="other""#));
 }

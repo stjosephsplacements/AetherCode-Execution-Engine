@@ -113,7 +113,7 @@ async fn retry_after_without_drain_rate_is_ten_seconds() {
 }
 
 #[tokio::test]
-async fn shed_returns_503_with_retry_after_from_drain_rate() {
+async fn shed_returns_429_with_retry_after_from_drain_rate() {
     let (_c, addr) = redis().await;
     let q = queue(&addr).await;
     let (t, drain) = manual_clock();
@@ -132,7 +132,7 @@ async fn shed_returns_503_with_retry_after_from_drain_rate() {
         .oneshot(req("POST", "/api/v1/execute").body(empty()).unwrap())
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(resp.headers()["retry-after"], "4");
     assert_eq!(
         body_string(resp).await,
