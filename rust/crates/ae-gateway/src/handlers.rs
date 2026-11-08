@@ -418,6 +418,13 @@ async fn execute_traced(
     body: Body,
     job_traceparent: String,
 ) -> Response {
+    // Starting up or draining for shutdown: take no new work; every other route keeps serving.
+    if !st.ready.load(Ordering::SeqCst) {
+        let mut r = json_error(StatusCode::SERVICE_UNAVAILABLE, "engine is not ready");
+        r.headers_mut()
+            .insert(header::RETRY_AFTER, HeaderValue::from_static("5"));
+        return r;
+    }
     let ct = headers
         .get(header::CONTENT_TYPE)
         .and_then(|v| v.to_str().ok())

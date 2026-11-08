@@ -360,6 +360,8 @@ pub struct StackOpts {
     pub max_depth: usize,
     /// Start a worker consuming the streams.
     pub worker: bool,
+    /// Leave the readiness flag cleared (stacks are ready by default, as after startup).
+    pub not_ready: bool,
     /// Extra `AC_*` settings.
     pub env: Vec<(&'static str, &'static str)>,
 }
@@ -451,6 +453,7 @@ pub async fn stack(opts: StackOpts) -> Stack {
         auth,
         redis_conn(&redis_addr).await,
     );
+    state.set_ready(!opts.not_ready);
     let shutdown = tokio_util::sync::CancellationToken::new();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());

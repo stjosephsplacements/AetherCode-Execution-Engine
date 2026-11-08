@@ -600,8 +600,36 @@ async fn admission_sheds_with_retry_after_from_drain_rate() {
 }
 
 #[tokio::test]
-async fn livez_readyz_and_metrics() {
+async fn execute_is_503_while_not_ready_but_other_routes_are_served() {
     let st = stack(StackOpts::default()).await;
+    st.state.set_ready(false);
+    let r = post_execute(&st, &run_body("3", ""), None).await;
+    assert_eq!(r.status(), 503);
+    assert_eq!(r.headers().get("retry-after").unwrap(), "5");
+    assert_eq!(xlen(&st, "ac:submissions:run").await, 0, "nothing enqueued");
+    for (p, want) in [
+        ("/readyz", 503),
+        ("/livez", 200),
+        ("/api/v1/health", 200),
+        ("/api/v1/languages", 200),
+    ] {
+        let r = http().get(format!("{}{p}", st.url)).send().await.unwrap();
+        assert_eq!(r.status(), want, "{p}");
+    }
+    st.state.set_ready(true);
+    assert_eq!(
+        post_execute(&st, &run_body("3", ""), None).await.status(),
+        201
+    );
+}
+
+#[tokio::test]
+async fn livez_readyz_and_metrics() {
+    let st = stack(StackOpts {
+        not_ready: true,
+        ..Default::default()
+    })
+    .await;
     let r = http()
         .get(format!("{}/livez", st.url))
         .send()
