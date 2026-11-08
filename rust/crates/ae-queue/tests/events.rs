@@ -102,6 +102,7 @@ async fn get_tests_round_trips_every_field() {
         callback_url: "https://hook.example/cb".into(),
         callback_secret: "s3cret".into(),
         output_mode: "preview".into(),
+        traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01".into(),
     };
     e.q.prepare_and_enqueue(&j, &set, "ac:s").await.unwrap();
     let got = e.q.get_tests("job-all").await.unwrap();

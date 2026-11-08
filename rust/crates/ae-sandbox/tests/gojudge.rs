@@ -339,3 +339,26 @@ async fn run_piped_sends_pipe_mapping_and_run_omits_it() {
         serde_json::from_slice(&plain.received_requests().await.unwrap()[0].body).unwrap();
     assert!(body.get("pipeMapping").is_none(), "{body}");
 }
+
+#[tokio::test]
+async fn request_timeout_bounds_a_hung_judge() {
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/version"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(serde_json::json!({"buildVersion": "v"}))
+                .set_delay(std::time::Duration::from_secs(30)),
+        )
+        .mount(&server)
+        .await;
+    let m: HashMap<String, String> = [("AC_JUDGE_URL".to_owned(), server.uri())].into();
+    let j = GoJudge::with_request_timeout(
+        &Config::from_map(&m).unwrap(),
+        std::time::Duration::from_millis(200),
+    )
+    .unwrap();
+    let start = std::time::Instant::now();
+    assert!(j.version().await.is_err());
+    assert!(start.elapsed() < std::time::Duration::from_secs(5));
+}

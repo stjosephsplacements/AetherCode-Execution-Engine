@@ -222,6 +222,35 @@ fn decode_first(body: &[u8]) -> Option<ExecuteRequest> {
         .ok()
 }
 
+#[cfg(test)]
+mod traceparent_tests {
+    use super::traceparent;
+    use axum::http::{HeaderMap, HeaderValue};
+
+    fn tp(v: &str) -> String {
+        let mut h = HeaderMap::new();
+        h.insert("traceparent", HeaderValue::from_str(v).unwrap());
+        traceparent(&h)
+    }
+
+    #[test]
+    fn accepts_only_well_formed_w3c_values() {
+        let ok = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+        assert_eq!(tp(ok), ok);
+        assert_eq!(traceparent(&HeaderMap::new()), "");
+        for bad in [
+            "01-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+            "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+            "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+            "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7",
+            "garbage",
+        ] {
+            assert_eq!(tp(bad), "", "{bad}");
+        }
+    }
+}
+
 fn valid_checker(s: &str) -> bool {
     matches!(s, "" | "exact" | "token" | "float" | "custom")
 }
@@ -259,6 +288,33 @@ fn scaled(v: Option<u64>, unit: u64, min: u64, max: u64) -> Result<u64, ()> {
             Some(x) if (min..=max).contains(&x) => Ok(x),
             _ => Err(()),
         },
+    }
+}
+
+/// The request's W3C `traceparent` header when well formed (version `00`, non-zero
+/// trace and span ids), else empty. It travels with the job so worker spans join the trace.
+#[must_use]
+pub fn traceparent(headers: &HeaderMap) -> String {
+    let Some(v) = headers.get("traceparent").and_then(|v| v.to_str().ok()) else {
+        return String::new();
+    };
+    let parts: Vec<&str> = v.split('-').collect();
+    let hex = |s: &str, n: usize| {
+        s.len() == n
+            && s.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+            && s.bytes().any(|b| b != b'0')
+    };
+    match parts.as_slice() {
+        ["00", trace, span, flags]
+            if hex(trace, 32)
+                && hex(span, 16)
+                && flags.len() == 2
+                && flags.bytes().all(|b| b.is_ascii_hexdigit()) =>
+        {
+            v.to_owned()
+        }
+        _ => String::new(),
     }
 }
 
@@ -545,6 +601,7 @@ pub async fn execute(
         callback_url: req.callback_url,
         callback_secret: req.callback_secret,
         output_mode: req.output,
+        traceparent: traceparent(&headers),
     };
     let timeout_ms = i64::try_from(st.job_timeout.as_millis()).unwrap_or(i64::MAX);
     let job = Job {

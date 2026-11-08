@@ -41,6 +41,9 @@ pub struct TestSet {
     pub callback_secret: String,
     /// `full` (empty), `preview` or `none`.
     pub output_mode: String,
+    /// W3C `traceparent` of the request that queued the job (empty when none); the
+    /// worker parents its job span on it. Go ignores the extra hash field.
+    pub traceparent: String,
 }
 
 /// What [`Queue::get_tests`] reads back from `ac:tests:<job>`.
@@ -244,6 +247,9 @@ impl Queue {
                 ("callback_secret".into(), secret),
                 ("output_mode".into(), set.output_mode.clone().into_bytes()),
             ];
+            if !set.traceparent.is_empty() {
+                f.push(("traceparent".into(), set.traceparent.clone().into_bytes()));
+            }
             if !set.files.is_empty() {
                 f.push(("files_json".into(), json(&set.files)?.into_bytes()));
             }
@@ -387,6 +393,7 @@ impl Queue {
                 callback_url: s("callback_url"),
                 callback_secret,
                 output_mode: s("output_mode"),
+                traceparent: s("traceparent"),
             },
         })
     }

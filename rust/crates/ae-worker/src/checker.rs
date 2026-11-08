@@ -103,7 +103,12 @@ pub async fn prepare_program(
         && let Some(src) = lang.placement.source.as_deref()
     {
         let (sb, name, bytes) = (sandbox.clone(), file_name(src).to_owned(), code.to_owned());
-        let upload = async move { Ok(sb.cache_file(&name, bytes.as_bytes()).await?) };
+        let upload = async move {
+            tokio::time::timeout(UPLOAD_TIMEOUT, sb.cache_file(&name, bytes.as_bytes()))
+                .await
+                .map_err(|_| Error::Other(format!("upload timed out after {UPLOAD_TIMEOUT:?}")))?
+                .map_err(Error::from)
+        };
         match cache.get_or_compile(key, upload).await {
             Ok((f, _)) => program.file = Some(f),
             Err(e) => tracing::warn!(kind, error = %e, "upload failed; inlining the source"),
@@ -111,6 +116,9 @@ pub async fn prepare_program(
     }
     Ok(program)
 }
+
+/// Bound on one checker or interactor source upload to go-judge.
+pub(crate) const UPLOAD_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Allowance beyond the compile's wall-clock limit for the go-judge round trip.
 pub(crate) const COMPILE_SLACK: Duration = Duration::from_secs(5);

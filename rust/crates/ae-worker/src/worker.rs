@@ -15,6 +15,7 @@ use ae_queue::Delivery;
 use ae_sandbox::{Language, Registry, RunLimits, Sandbox};
 use futures_util::FutureExt;
 use serde_json::json;
+use std::collections::HashMap;
 use std::panic::AssertUnwindSafe;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +23,8 @@ use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 const HEARTBEAT: Duration = Duration::from_secs(30);
 const PANIC_BACKOFF: Duration = Duration::from_secs(1);
@@ -197,16 +200,27 @@ impl Worker {
     /// # Errors
     /// A database, queue or other failure before the outcome was recorded, or the ack itself.
     pub async fn process(&self, d: Delivery) -> Result<()> {
-        self.handle(&d.job_id).await?;
+        let id = d.job_id.as_str();
+        let started = Instant::now();
+        // Test data (Redis) and the claim (Postgres) are independent; overlap them.
+        let (spec, claim) = tokio::join!(self.inner.bus.get_tests(id), self.claim(id));
+        let traceparent = spec.as_ref().map_or("", |s| s.set.traceparent.as_str());
+        let span = job_span(id, traceparent);
+        self.handle(id, started, spec, claim)
+            .instrument(span)
+            .await?;
         self.inner.bus.ack(&d).await
     }
 
-    async fn handle(&self, id: &str) -> Result<()> {
+    async fn handle(
+        &self,
+        id: &str,
+        started: Instant,
+        spec: Result<ae_queue::JobSpec>,
+        claim: Result<Option<ae_core::model::Submission>>,
+    ) -> Result<()> {
         let inner = &*self.inner;
         let obs = &inner.opts.observer;
-        let started = Instant::now();
-        // Test data (Redis) and the claim (Postgres) are independent; overlap them.
-        let (spec, claim) = tokio::join!(inner.bus.get_tests(id), self.claim(id));
         let Some(sub) = claim? else {
             return Ok(());
         };
@@ -327,13 +341,15 @@ impl Worker {
             && !lang.placement.stdin_is_source
             && let Some(src) = lang.placement.source.as_deref()
         {
-            match inner
+            let upload = inner
                 .sandbox
-                .cache_file(file_name(src), sub.source_code.as_bytes())
-                .await
-            {
-                Ok(fid) => binary = Some(CachedFile::owned(fid, inner.sandbox.clone())),
-                Err(e) => tracing::warn!(job_id = id, error = %e, "source upload failed; inlining"),
+                .cache_file(file_name(src), sub.source_code.as_bytes());
+            match tokio::time::timeout_at(deadline, upload).await {
+                Ok(Ok(fid)) => binary = Some(CachedFile::owned(fid, inner.sandbox.clone())),
+                Ok(Err(e)) => {
+                    tracing::warn!(job_id = id, error = %e, "source upload failed; inlining");
+                }
+                Err(_) => tracing::warn!(job_id = id, "source upload timed out; inlining"),
             }
         }
 
@@ -593,6 +609,21 @@ impl Drop for Active<'_> {
     fn drop(&mut self) {
         self.0.job_ended();
     }
+}
+
+/// The `job` span. A well-formed `traceparent` from the request that queued the job
+/// becomes its OpenTelemetry parent, so worker spans join the gateway's trace; without
+/// an OpenTelemetry layer the field is only logged.
+fn job_span(id: &str, traceparent: &str) -> tracing::Span {
+    let span = tracing::info_span!("job", job_id = id, traceparent);
+    if !traceparent.is_empty() {
+        let carrier = HashMap::from([("traceparent".to_owned(), traceparent.to_owned())]);
+        let cx = opentelemetry::global::get_text_map_propagator(|p| p.extract(&carrier));
+        if let Err(e) = span.set_parent(cx) {
+            tracing::debug!(job_id = id, error = %e, "job span: trace parent not set");
+        }
+    }
+    span
 }
 
 fn verdict_name(v: Verdict) -> String {

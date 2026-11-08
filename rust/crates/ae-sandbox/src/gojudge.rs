@@ -46,22 +46,35 @@ struct RunRequest<'a> {
 }
 
 impl GoJudge {
-    /// Builds a client for `AC_JUDGE_URL` authenticated with `AC_JUDGE_TOKEN`.
+    /// Builds a client for `AC_JUDGE_URL` authenticated with `AC_JUDGE_TOKEN`, with no
+    /// overall request timeout (callers bound each call).
     pub fn new(cfg: &Config) -> Result<Self, Error> {
+        Self::build(cfg, None)
+    }
+
+    /// Like [`GoJudge::new`], but every request (connect, send and body read) fails with
+    /// [`Error::Http`] once `timeout` passes, so a hung go-judge cannot hold a job forever.
+    pub fn with_request_timeout(cfg: &Config, timeout: Duration) -> Result<Self, Error> {
+        Self::build(cfg, Some(timeout))
+    }
+
+    fn build(cfg: &Config, timeout: Option<Duration>) -> Result<Self, Error> {
         if !cfg.judge_url.starts_with("http://") {
             return Err(Error::Config(format!(
                 "AC_JUDGE_URL must be an http:// URL (TLS is not supported), got {:?}",
                 cfg.judge_url
             )));
         }
-        // No overall timeout: batched /run calls vary in duration; callers bound them.
-        let http = Client::builder()
+        let mut builder = Client::builder()
             .pool_max_idle_per_host(128)
             .pool_idle_timeout(Duration::from_secs(90))
             .connect_timeout(Duration::from_secs(5))
             .tcp_keepalive(Duration::from_secs(30))
-            .tcp_nodelay(true)
-            .build()?;
+            .tcp_nodelay(true);
+        if let Some(t) = timeout {
+            builder = builder.timeout(t);
+        }
+        let http = builder.build()?;
         Ok(Self {
             base_url: cfg.judge_url.trim_end_matches('/').to_owned(),
             token: cfg.judge_token.clone(),
