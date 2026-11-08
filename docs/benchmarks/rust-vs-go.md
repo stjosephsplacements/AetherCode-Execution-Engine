@@ -14,7 +14,12 @@ the 256-core server.
 
 Cold vs warm: the verdict payload has no compile-cache flag, so `loadgen` classifies the
 first submission of each `(language, source)` pair as COLD and every repeat as WARM.
-Hit rate for the compile cache comes from the engine's metrics, not from `loadgen`.
+A pair counts as seen only after its POST was accepted. Students that submit a new pair
+at the same moment can inflate WARM slightly while the first copy compiles. The compile
+cache survives between runs, so restart the engine before every repeat or the next run
+starts warm. The compile-cache hit rate comes from the engine's `ac_compile_cache_hits_total`
+metric (divide by compile requests), not from `loadgen`. POST retries after 429/5xx are
+reported as `post_retries`, apart from `error_rate`, and are excluded from ingestion latency.
 
 ## Targets (256-core server)
 
@@ -24,7 +29,7 @@ Hit rate for the compile cache comes from the engine's metrics, not from `loadge
 | 1000 | < 1 s | < 2 s | compile-cache hit rate > 90% for multi-test jobs |
 | 5000+ | must stay up | n/a | concurrent students |
 
-Go baseline for reference: p95 of about 3 s at 200 and 5 s at 1000 students.
+Go baseline for reference (owner-reported, from the design spec): p95 verdicts of about 3 s at 200 and 5 s at 1000 students.
 
 ## Build
 
@@ -37,7 +42,8 @@ cd rust && cargo build --release -p ae-loadgen -p ae-shadowdiff -p ae-engine
 ## Run: Go engine
 
 ```bash
-printf "POSTGRES_PASSWORD=...\nAC_JUDGE_TOKEN=...\n" > .env   # choose real values
+# append to .env if one exists (do not overwrite it); choose real values
+printf "POSTGRES_PASSWORD=...\nAC_JUDGE_TOKEN=...\n" >> .env
 docker compose up --build -d
 curl -fsS http://127.0.0.1:5100/api/v1/health
 ```
@@ -72,6 +78,10 @@ $LG --url http://127.0.0.1:5100 --students 200 --languages c,cpp,python,java \
 # 1000 students
 $LG --url http://127.0.0.1:5100 --students 1000 --languages c,cpp,python,java \
     --duration 5m --ramp 60s --json > results-1000-<engine>.json
+
+# 5000 students
+$LG --url http://127.0.0.1:5100 --students 5000 --languages c,cpp,python,java \
+    --duration 5m --ramp 120s --json > results-5000-<engine>.json
 ```
 
 Flags: `--token` (or `AC_LOADGEN_TOKEN`) when auth is enabled, `--think-min/--think-max`
@@ -92,7 +102,14 @@ rust/target/release/shadowdiff --redis redis://127.0.0.1:6379/ \
     --pg "postgres://aethercode:$POSTGRES_PASSWORD@127.0.0.1:5433/aethercode_exec" --since 1h
 ```
 
-Exit 0 and `diff=0` is required. `pending` (Go not finished) and `ignored` (the tests hash
+`--pg` must connect as the owner role or one that bypasses row-level security; under RLS
+every row looks missing. The URL can come from `SHADOWDIFF_PG` (then `AC_DATABASE_URL`) and
+Redis from `SHADOWDIFF_REDIS`: command-line flags are visible in `ps`, so prefer the
+environment when a URL holds a password.
+
+The tool fails closed. Exit 1 on any diff, any unreadable shadow record, or when nothing was
+compared while jobs are pending; `--fail-on-pending` also fails on any pending job and lists
+their ids. Exit 0 and `diff=0 unreadable=0` is required. `pending` (Go not finished) and `ignored` (the tests hash
 had expired) are reported separately and are not diffs; rerun until `pending=0`.
 
 ## Results (to be filled by the repo owner on the 256-core server)
@@ -110,12 +127,8 @@ had expired) are reported separately and are not diffs; rerun until `pending=0`.
 
 Shadow parity result (`compared/matched/diff/pending/ignored`):
 
-## Smoke result (engine overhead only, NOT sandbox time)
+## Smoke test (not a benchmark)
 
-`cargo test -p ae-engine --test loadgen_smoke -- --nocapture` runs the real `engine`
-binary against Postgres, Redis and an in-process fake go-judge that answers instantly.
-It exists to prove `loadgen` works end to end. Because go-judge is stubbed, the latencies
-exclude compile and execution time and say nothing about the targets above. One run on a
-laptop (20 students, python only, 5 s): 726 submissions, 0 lost, verdict p50/p95/p99 of
-22.8/48.2/87.3 ms, ingestion p50 6.6 ms, 4 cold and 722 warm. Every verdict was
-`wrong_answer` by construction (the stub prints "hello" for every program).
+`cargo test -p ae-engine --test loadgen_smoke -- --nocapture` runs the real `engine` binary
+against Postgres, Redis and an in-process fake go-judge, only to prove `loadgen` works end
+to end. The sandbox is stubbed, so its latencies say nothing about the targets above.

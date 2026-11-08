@@ -89,18 +89,14 @@ pub async fn run(cfg: Config) -> Result<Report, String> {
 }
 
 async fn submit(c: &Ctx, t: &Template) -> Sample {
-    let cold = c
-        .seen
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .insert((t.language.to_owned(), t.source.to_owned()));
     let mut s = Sample {
         language: t.language.to_owned(),
         expected: t.expected_verdict.to_owned(),
         actual: None,
         ingest_ms: 0.0,
         verdict_ms: 0.0,
-        cold,
+        cold: false,
+        retries: 0,
         error: None,
     };
     match drive(c, t, &mut s).await {
@@ -121,7 +117,9 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
     let payload = json!({"language": t.language, "source_code": t.source, "tests": t.tests});
     let t0 = Instant::now();
     let mut resp = None;
+    let mut post_start = t0;
     for attempt in 0..8u32 {
+        post_start = Instant::now();
         let r = authed(c, c.post.post(format!("{}/api/v1/execute", c.cfg.url)))
             .json(&payload)
             .send()
@@ -129,6 +127,7 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
             .map_err(|e| format!("POST failed: {}", e.without_url()))?;
         let code = r.status().as_u16();
         if code == 429 || code >= 500 {
+            s.retries += 1;
             tokio::time::sleep(Duration::from_millis(100 << attempt.min(5))).await;
             continue;
         }
@@ -136,10 +135,18 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
         break;
     }
     let resp = resp.ok_or("POST failed: all retries exhausted")?;
-    s.ingest_ms = ms(t0.elapsed());
+    // Ingestion is the accepted attempt only; retry waits are counted in `retries`.
+    s.ingest_ms = ms(post_start.elapsed());
     if resp.status().as_u16() != 201 {
         return Err(format!("POST status {}", resp.status().as_u16()));
     }
+    // Cold means the engine has not yet seen this pair; only an accepted submission
+    // counts as having shown it.
+    s.cold = c
+        .seen
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((t.language.to_owned(), t.source.to_owned()));
     let body: Value = resp.json().await.map_err(|_| "invalid POST response")?;
     let job = body["job_id"].as_str().ok_or("invalid POST response")?;
     let mut url = format!("{}/api/v1/stream?job_id={job}", c.cfg.url);

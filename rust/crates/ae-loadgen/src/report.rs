@@ -13,6 +13,8 @@ pub struct Sample {
     pub ingest_ms: f64,
     pub verdict_ms: f64,
     pub cold: bool,
+    /// POST attempts that were answered 429 or 5xx and retried.
+    pub retries: u32,
     pub error: Option<String>,
 }
 
@@ -66,6 +68,11 @@ pub struct Report {
     pub error_rate: f64,
     /// mismatched / completed
     pub mismatch_rate: f64,
+    /// Total POST retries after 429/5xx. Reported apart from `error_rate`: a retried
+    /// submission that then succeeds is not an error and its retry wait is not in `ingest`.
+    pub post_retries: usize,
+    /// Submissions that needed at least one retry.
+    pub retried_submissions: usize,
     pub wall_time_ms: u128,
     pub throughput: f64,
     pub verdict_rate: f64,
@@ -101,6 +108,8 @@ pub fn build_report(samples: &[Sample], wall: Duration) -> Report {
         mismatched: 0,
         error_rate: 0.0,
         mismatch_rate: 0.0,
+        post_retries: 0,
+        retried_submissions: 0,
         wall_time_ms: wall.as_millis(),
         throughput: 0.0,
         verdict_rate: 0.0,
@@ -115,6 +124,8 @@ pub fn build_report(samples: &[Sample], wall: Duration) -> Report {
     let (mut ing, mut all, mut cold, mut warm) = (vec![], vec![], vec![], vec![]);
     for s in samples {
         *r.languages.entry(s.language.clone()).or_default() += 1;
+        r.post_retries += s.retries as usize;
+        r.retried_submissions += usize::from(s.retries > 0);
         let Some(actual) = &s.actual else {
             r.lost += 1;
             *r.errors
@@ -177,6 +188,11 @@ impl Report {
             self.mismatched,
             self.mismatch_rate * 100.0
         );
+        let _ = writeln!(
+            o,
+            "  POST retries:       {} in {} submissions (429/5xx, not counted as errors)",
+            self.post_retries, self.retried_submissions
+        );
         let _ = writeln!(o, "  Wall time:          {} ms", self.wall_time_ms);
         let _ = writeln!(
             o,
@@ -234,6 +250,7 @@ mod tests {
             ingest_ms: 1.0,
             verdict_ms: ms,
             cold,
+            retries: 0,
             error: None,
         }
     }
@@ -259,6 +276,25 @@ mod tests {
         let j: serde_json::Value = serde_json::from_str(&r.json()).unwrap();
         assert_eq!(j["verdict_cold"]["count"], 2);
         assert_eq!(j["verdict_warm"]["count"], 100);
+    }
+
+    #[test]
+    fn retries_are_reported_apart_from_errors() {
+        let v = vec![
+            Sample {
+                retries: 3,
+                ..s(false, 10.0)
+            },
+            Sample {
+                retries: 1,
+                ..s(false, 10.0)
+            },
+            s(false, 10.0),
+        ];
+        let r = build_report(&v, Duration::from_secs(1));
+        assert_eq!((r.post_retries, r.retried_submissions), (4, 2));
+        assert_eq!((r.lost, r.error_rate.to_bits()), (0, 0.0f64.to_bits()));
+        assert!(r.table().contains("POST retries:       4 in 2 submissions"));
     }
 
     #[test]
