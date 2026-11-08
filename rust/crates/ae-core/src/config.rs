@@ -63,6 +63,8 @@ pub struct Config {
     pub prewarm: usize,
     pub role: String,
     pub otlp_endpoint: String,
+    /// `AC_LANGUAGES_FILE`: TOML language table replacing the built-in one; empty uses the built-in.
+    pub languages_file: String,
 }
 
 impl Config {
@@ -138,6 +140,7 @@ impl Config {
             prewarm: num(m, "AC_PREWARM", 16)?,
             role: s("AC_ROLE", "all"),
             otlp_endpoint: s("AC_OTLP_ENDPOINT", ""),
+            languages_file: s("AC_LANGUAGES_FILE", ""),
         })
     }
 
@@ -323,6 +326,7 @@ mod tests {
         assert_eq!(c.prewarm, 16);
         assert_eq!(c.role, "all");
         assert_eq!(c.otlp_endpoint, "");
+        assert_eq!(c.languages_file, "");
         assert!(c.trusted_proxies.is_empty());
         assert!(c.webhook_master_key.is_none());
     }

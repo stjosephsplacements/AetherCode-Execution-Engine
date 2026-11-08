@@ -1,0 +1,26 @@
+[package]
+name = "ae-sandbox"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+ae-core = { version = "0.1.0", path = "../ae-core" }
+async-trait = "0.1.92"
+futures-util = "0.3.34"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "multipart"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror.workspace = true
+tokio = { version = "1.54.1", features = ["rt"] }
+toml = "1.2.1"
+tracing = "0.1.44"
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros"] }
+wiremock = "0.6.5"

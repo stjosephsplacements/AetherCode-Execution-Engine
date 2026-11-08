@@ -1,0 +1,221 @@
+# Built-in language table. It is the only place command templates are defined.
+# Replace it at startup with AC_LANGUAGES_FILE (same shape).
+#
+# Per language:
+#   compiler      argv of the toolchain version probe (`--version`)
+#   compile_cmd   compile template (absent for interpreted languages)
+#   execute_cmd   run template
+#   *.limits      cpu (ns), memory (bytes), procs; execute_cmd.limits.min_memory
+#                 is the floor for a per-request memory limit (JVM heap + metaspace)
+#   compile_cmd.defaults  flags appended unless a caller flag has the same name
+#   allowed_flags caller compiler flags accepted for the language
+#   parallelism   concurrent tests per job; absent means unbounded
+#   overlay       where the source and binary live inside the sandbox; stdin_is_source
+#                 delivers the source on stdin instead of as a file
+#   hello         self-test program; it must print "hello"
+
+[languages.c]
+compiler = ["/usr/bin/gcc", "--version"]
+allowed_flags = ["-O0", "-O1", "-O2", "-O3", "-Os", "-std=c99", "-std=c11", "-std=c17", "-lm", "-Wall", "-Wextra", "-pedantic"]
+overlay = { source = "/w/main.c", binary = "/w/a.out" }
+hello = '''
+#include <stdio.h>
+int main(void) { puts("hello"); return 0; }
+'''
+[languages.c.compile_cmd]
+args = ["/usr/bin/gcc", "-o", "/w/a.out", "/w/main.c", "-O2", "-pipe", "-lm"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 10_000_000_000, memory = 268_435_456, procs = 50 }
+[languages.c.execute_cmd]
+args = ["/w/a.out"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
+
+[languages.cpp]
+compiler = ["/usr/bin/g++", "--version"]
+allowed_flags = ["-O0", "-O1", "-O2", "-O3", "-Os", "-std=c++11", "-std=c++14", "-std=c++17", "-std=c++20", "-std=c++23", "-lm", "-Wall", "-Wextra", "-pedantic"]
+overlay = { source = "/w/main.cpp", binary = "/w/a.out" }
+hello = '''
+#include <iostream>
+int main() { std::cout << "hello\n"; return 0; }
+'''
+[languages.cpp.compile_cmd]
+args = ["/usr/bin/g++", "-o", "/w/a.out", "/w/main.cpp", "-O2", "-pipe", "-std=c++17"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 10_000_000_000, memory = 268_435_456, procs = 50 }
+[languages.cpp.execute_cmd]
+args = ["/w/a.out"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
+
+[languages.go]
+compiler = ["/usr/bin/go", "version"]
+overlay = { source = "/w/main.go", binary = "/w/main" }
+hello = '''
+package main
+
+import "fmt"
+
+func main() { fmt.Println("hello") }
+'''
+[languages.go.compile_cmd]
+args = ["/usr/bin/go", "build", "-o", "/w/main", "/w/main.go"]
+env = ["PATH=/usr/bin:/bin", "GOROOT=/usr/lib/go-1.22", "HOME=/tmp", "GOCACHE=/tmp/go-cache"]
+limits = { cpu = 30_000_000_000, memory = 1_073_741_824, procs = 512 }
+[languages.go.execute_cmd]
+args = ["/w/main"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 20 }
+
+[languages.java]
+compiler = ["/usr/bin/javac", "--version"]
+parallelism = 4
+overlay = { source = "/w/Main.java", binary = "/w/Main.class" }
+hello = '''
+public class Main { public static void main(String[] a) { System.out.println("hello"); } }
+'''
+[languages.java.compile_cmd]
+args = ["/usr/bin/javac", "-J-XX:TieredStopAtLevel=1", "-J-XX:+UseSerialGC", "-J-Xshare:auto", "-d", "/w", "/w/Main.java"]
+env = ["PATH=/usr/bin:/bin", "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64"]
+limits = { cpu = 15_000_000_000, memory = 536_870_912, procs = 50 }
+[languages.java.execute_cmd]
+args = ["/usr/bin/java", "-XX:+TieredCompilation", "-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-Xshare:auto", "-cp", "/w", "Main"]
+env = ["PATH=/usr/bin:/bin", "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50, min_memory = 268_435_456 }
+
+[languages.python]
+compiler = ["/usr/bin/python3", "--version"]
+parallelism = 8
+overlay = { source = "/w/main.py" }
+hello = '''
+print("hello")
+'''
+[languages.python.execute_cmd]
+args = ["/usr/bin/python3", "/w/main.py"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
+
+[languages.javascript]
+compiler = ["/usr/bin/node", "--version"]
+parallelism = 8
+overlay = { source = "/w/main.js" }
+hello = '''
+console.log("hello");
+'''
+[languages.javascript.execute_cmd]
+args = ["/usr/bin/node", "/w/main.js"]
+env = ["PATH=/usr/bin:/bin", "HOME=/tmp"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
+
+[languages.sqlite]
+compiler = ["/usr/bin/sqlite3", "--version"]
+parallelism = 8
+overlay = { stdin_is_source = true }
+hello = '''
+SELECT 'hello';
+'''
+[languages.sqlite.execute_cmd]
+args = ["/usr/bin/sqlite3", ":memory:"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
+
+[languages.bash]
+compiler = ["/bin/bash", "--version"]
+parallelism = 8
+overlay = { source = "/w/main.sh" }
+hello = '''
+echo hello
+'''
+[languages.bash.execute_cmd]
+args = ["/bin/bash", "/w/main.sh"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 268_435_456, procs = 20 }
+
+[languages.csharp]
+compiler = ["/usr/bin/mcs", "--version"]
+parallelism = 4
+overlay = { source = "/w/Main.cs", binary = "/w/main.exe" }
+hello = '''
+public class Program { public static void Main() { System.Console.WriteLine("hello"); } }
+'''
+[languages.csharp.compile_cmd]
+args = ["/usr/bin/mcs", "-out:/w/main.exe", "/w/Main.cs"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 15_000_000_000, memory = 536_870_912, procs = 50 }
+[languages.csharp.execute_cmd]
+args = ["/usr/bin/mono", "/w/main.exe"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 20, min_memory = 134_217_728 }
+
+[languages.kotlin]
+compiler = ["/usr/bin/kotlinc", "-version"]
+parallelism = 4
+overlay = { source = "/w/Main.kt", binary = "/w/Main.jar" }
+hello = '''
+fun main() { println("hello") }
+'''
+[languages.kotlin.compile_cmd]
+args = ["/usr/bin/kotlinc", "/w/Main.kt", "-include-runtime", "-d", "/w/Main.jar"]
+env = ["PATH=/usr/bin:/bin", "KOTLIN_HOME=/usr/share/kotlin"]
+limits = { cpu = 20_000_000_000, memory = 1_073_741_824, procs = 50 }
+[languages.kotlin.execute_cmd]
+args = ["/usr/bin/java", "-XX:TieredStopAtLevel=1", "-XX:+UseSerialGC", "-Xshare:auto", "-jar", "/w/Main.jar"]
+env = ["PATH=/usr/bin:/bin", "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50, min_memory = 268_435_456 }
+
+[languages.rust]
+compiler = ["/usr/bin/rustc", "--version"]
+allowed_flags = ["-O", "--edition=2018", "--edition=2021"]
+overlay = { source = "/w/main.rs", binary = "/w/a.out" }
+# try_into is only in the edition 2021 prelude, so the self-test also proves the edition.
+hello = '''
+fn main() { let _x: u8 = 1u32.try_into().unwrap(); println!("hello"); }
+'''
+[languages.rust.compile_cmd]
+args = ["/usr/bin/rustc", "-O", "-o", "/w/a.out", "/w/main.rs"]
+# Without --edition rustc compiles as edition 2015, where TryFrom, TryInto and
+# FromIterator are not in the prelude.
+defaults = ["--edition=2021"]
+env = ["PATH=/usr/bin:/bin", "HOME=/tmp"]
+limits = { cpu = 20_000_000_000, memory = 536_870_912, procs = 50 }
+[languages.rust.execute_cmd]
+args = ["/w/a.out"]
+env = ["PATH=/usr/bin:/bin"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
+
+[languages.typescript]
+compiler = ["/usr/bin/bun", "--version"]
+parallelism = 8
+overlay = { source = "/w/main.ts" }
+hello = '''
+const s: string = "hello";
+console.log(s);
+'''
+[languages.typescript.execute_cmd]
+args = ["/usr/bin/bun", "run", "/w/main.ts"]
+env = ["PATH=/usr/bin:/bin", "HOME=/tmp"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
+
+[languages.php]
+compiler = ["/usr/bin/php", "--version"]
+parallelism = 8
+overlay = { source = "/w/main.php" }
+hello = '''
+<?php echo "hello\n";
+'''
+[languages.php.execute_cmd]
+args = ["/usr/bin/php", "/w/main.php"]
+env = ["PATH=/usr/bin:/bin", "HOME=/tmp"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
+
+[languages.ruby]
+compiler = ["/usr/bin/ruby", "--version"]
+parallelism = 8
+overlay = { source = "/w/main.rb" }
+hello = '''
+puts "hello"
+'''
+[languages.ruby.execute_cmd]
+args = ["/usr/bin/ruby", "/w/main.rb"]
+env = ["PATH=/usr/bin:/bin", "HOME=/tmp"]
+limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
