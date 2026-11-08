@@ -17,6 +17,7 @@ pub use events::{SUBSCRIBER_BUFFER, Subscription};
 pub use reclaim::{DLQ_STREAM, MAX_DELIVERIES, RECLAIM_MIN_IDLE};
 
 use ae_core::Config;
+use ae_core::model::Verdict;
 use redis::aio::ConnectionManager;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -36,6 +37,33 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Where an expired job's terminal state is recorded before its message is acked. It is a
+/// constructor argument so a queue cannot drop an expired job without persisting the failure
+/// (otherwise the orphan reaper would find the row still `queued` and re-enqueue it).
+/// Production passes [`ae_db::Db`].
+pub trait ExpiryStore: Send + Sync + 'static {
+    /// Marks the job failed with `verdict`; `Ok(false)` when it already has a verdict.
+    fn fail_expired<'a>(
+        &'a self,
+        job_id: &'a str,
+        verdict: Verdict,
+        message: &'a str,
+    ) -> BoxFuture<'a, Result<bool>>;
+}
+
+pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+
+impl ExpiryStore for ae_db::Db {
+    fn fail_expired<'a>(
+        &'a self,
+        job_id: &'a str,
+        verdict: Verdict,
+        message: &'a str,
+    ) -> BoxFuture<'a, Result<bool>> {
+        Box::pin(async move { Ok(self.fail_submission(job_id, verdict, message).await?) })
+    }
+}
+
 /// Handle to the queue. Cheap to clone; clones share connections, the hub and counters.
 #[derive(Clone)]
 pub struct Queue {
@@ -51,7 +79,7 @@ pub struct Queue {
     bulk_weight: usize,
     block: Duration,
     master_key: Option<Arc<[u8]>>,
-    db: Option<ae_db::Db>,
+    store: Arc<dyn ExpiryStore>,
     poisoned: Arc<AtomicU64>,
     hub: Arc<tokio::sync::Mutex<Option<events::HubHandle>>>,
 }
@@ -62,7 +90,7 @@ impl Queue {
     ///
     /// # Errors
     /// Fails when Redis is unreachable or a group cannot be created.
-    pub async fn connect(cfg: &Config) -> Result<Queue> {
+    pub async fn connect(cfg: &Config, store: Arc<dyn ExpiryStore>) -> Result<Queue> {
         let url = if cfg.redis_password.is_empty() {
             format!("redis://{}/", cfg.redis_addr)
         } else {
@@ -101,7 +129,7 @@ impl Queue {
                 cfg.block_read_timeout
             },
             master_key: cfg.webhook_master_key.as_deref().map(Arc::from),
-            db: None,
+            store,
             poisoned: Arc::new(AtomicU64::new(0)),
             hub: Arc::new(tokio::sync::Mutex::new(None)),
         };
@@ -111,23 +139,20 @@ impl Queue {
         Ok(q)
     }
 
-    /// Attaches the database so expired jobs are also marked failed in Postgres.
-    #[must_use]
-    pub fn with_db(mut self, db: ae_db::Db) -> Queue {
-        self.db = Some(db);
-        self
-    }
-
     /// Consumer name used for `XREADGROUP` (`$HOSTNAME-<pid>`).
     #[must_use]
     pub fn consumer_name(&self) -> &str {
         &self.consumer
     }
 
-    /// Submit, run and bulk stream names, in weighted-read order.
+    /// Configured (non-empty) submit, run and bulk stream names, in weighted-read order.
     #[must_use]
-    pub fn streams(&self) -> [&str; 3] {
+    pub fn streams(&self) -> Vec<&str> {
         [&self.submit, &self.run, &self.bulk]
+            .into_iter()
+            .map(String::as_str)
+            .filter(|s| !s.is_empty())
+            .collect()
     }
 
     #[must_use]

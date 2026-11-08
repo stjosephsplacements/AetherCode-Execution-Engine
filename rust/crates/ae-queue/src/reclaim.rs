@@ -1,4 +1,4 @@
-use crate::consumer::{Delivery, Entry};
+use crate::consumer::{Delivery, Entry, try_reserve_more};
 use crate::{Queue, Result};
 use redis::streams::{StreamAutoClaimReply, StreamPendingCountReply};
 use std::collections::HashMap;
@@ -13,6 +13,8 @@ pub const RECLAIM_MIN_IDLE: Duration = Duration::from_secs(30);
 pub const MAX_DELIVERIES: usize = 5;
 pub const DLQ_STREAM: &str = "ac:dlq:poison";
 const RECLAIMER: &str = "reclaimer";
+/// Entries claimed per `XAUTOCLAIM` (Go: 50), further capped by free channel slots.
+const CLAIM_BATCH: usize = 50;
 
 impl Queue {
     /// Runs [`reclaim_once`] every 30s with a 30s idle threshold until `tx`'s receiver drops.
@@ -49,7 +51,7 @@ impl Queue {
         tx: &mpsc::Sender<Delivery>,
         min_idle: Duration,
     ) -> Result<()> {
-        for s in self.streams().into_iter().filter(|s| !s.is_empty()) {
+        for s in self.streams() {
             if !self.reclaim_stream(s, tx, min_idle).await? {
                 return Ok(());
             }
@@ -57,7 +59,9 @@ impl Queue {
         Ok(())
     }
 
-    /// False when `tx` is closed.
+    /// False when `tx` has no free slot (or is closed): claiming without a slot would only
+    /// park the message under `reclaimer` and bump its delivery count, so the pass stops and
+    /// the next cycle retries.
     async fn reclaim_stream(
         &self,
         stream: &str,
@@ -67,6 +71,11 @@ impl Queue {
         let mut conn = self.conn.clone();
         let mut cursor = "0-0".to_owned();
         loop {
+            let mut permits = Vec::new();
+            try_reserve_more(tx, CLAIM_BATCH, &mut permits);
+            if permits.is_empty() {
+                return Ok(false);
+            }
             let claim: StreamAutoClaimReply = redis::cmd("XAUTOCLAIM")
                 .arg(stream)
                 .arg(&self.group)
@@ -74,25 +83,13 @@ impl Queue {
                 .arg(u64::try_from(min_idle.as_millis()).unwrap_or(u64::MAX))
                 .arg(&cursor)
                 .arg("COUNT")
-                .arg(50)
+                .arg(permits.len())
                 .query_async(&mut conn)
                 .await?;
             if !claim.claimed.is_empty() {
-                // The reclaimer's whole PEL, so counts left by interrupted cycles are known too.
-                let pending: StreamPendingCountReply = redis::cmd("XPENDING")
-                    .arg(stream)
-                    .arg(&self.group)
-                    .arg("-")
-                    .arg("+")
-                    .arg(1000)
-                    .arg(RECLAIMER)
-                    .query_async(&mut conn)
+                let counts = self
+                    .delivery_counts(&mut conn, stream, &claim.claimed)
                     .await?;
-                let counts: HashMap<&str, usize> = pending
-                    .ids
-                    .iter()
-                    .map(|p| (p.id.as_str(), p.times_delivered))
-                    .collect();
                 for m in &claim.claimed {
                     let count = counts.get(m.id.as_str()).copied().unwrap_or(0);
                     if count >= MAX_DELIVERIES
@@ -104,8 +101,9 @@ impl Queue {
                     if let Entry::Deliver(d) = self.admit(stream, m).await {
                         tracing::info!(stream, job_id = %d.job_id, msg_id = %d.msg_id,
                             delivery_count = count, "reclaimer: reprocessing");
-                        if tx.send(d).await.is_err() {
-                            return Ok(false);
+                        // Claimed at most permits.len(), so a permit is always left.
+                        if let Some(p) = permits.pop() {
+                            p.send(d);
                         }
                     }
                 }
@@ -115,6 +113,31 @@ impl Queue {
             }
             cursor = claim.next_stream_id;
         }
+    }
+
+    /// Exact delivery count of each claimed id: one `XPENDING <id> <id> 1` per id, pipelined,
+    /// so the lookup cannot be truncated however large the pending list grows.
+    async fn delivery_counts(
+        &self,
+        conn: &mut redis::aio::ConnectionManager,
+        stream: &str,
+        claimed: &[redis::streams::StreamId],
+    ) -> Result<HashMap<String, usize>> {
+        let mut pipe = redis::pipe();
+        for m in claimed {
+            pipe.cmd("XPENDING")
+                .arg(stream)
+                .arg(&self.group)
+                .arg(&m.id)
+                .arg(&m.id)
+                .arg(1);
+        }
+        let replies: Vec<StreamPendingCountReply> = pipe.query_async(conn).await?;
+        Ok(replies
+            .into_iter()
+            .flat_map(|r| r.ids)
+            .map(|p| (p.id, p.times_delivered))
+            .collect())
     }
 
     /// Copies a poison message to the DLQ, then acks it. A failed DLQ write leaves it pending.

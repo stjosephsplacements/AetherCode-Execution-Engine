@@ -76,8 +76,12 @@ impl Queue {
         Ok(Duration::from_millis(u64::try_from(age).unwrap_or(0)))
     }
 
-    /// Startup purge: `XTRIM MINID` drops entries older than `job_timeout` from the submit,
-    /// run and bulk streams; any such job's caller has already timed out. Returns the count.
+    /// Startup purge: `XTRIM MINID` drops entries older than `job_timeout` from the configured
+    /// (non-empty) submit, run and bulk streams; any such job's caller has already timed out.
+    /// Returns the count.
+    ///
+    /// `XTRIM MINID` also drops delivered-but-unacked entries older than `job_timeout`, so a
+    /// job that was still running when the engine restarted is not retried by the reclaimer.
     ///
     /// # Errors
     /// Fails on a Redis error.

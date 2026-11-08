@@ -1,9 +1,11 @@
 #![allow(dead_code)]
 
 use ae_core::Config;
-use ae_queue::Queue;
+use ae_core::model::Verdict;
+use ae_queue::{BoxFuture, ExpiryStore, Queue};
 use redis::aio::MultiplexedConnection;
 use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use testcontainers::runners::AsyncRunner;
 use testcontainers::{ContainerAsync, ImageExt};
 use testcontainers_modules::redis::Redis;
@@ -12,6 +14,7 @@ pub struct Env {
     _c: ContainerAsync<Redis>,
     pub addr: String,
     pub q: Queue,
+    pub store: Arc<FakeStore>,
     pub rdb: MultiplexedConnection,
 }
 
@@ -44,7 +47,10 @@ pub async fn env_with(extra: &[(&str, &str)]) -> Env {
         }
     };
     let addr = format!("127.0.0.1:{port}");
-    let q = Queue::connect(&cfg(&addr, extra)).await.unwrap();
+    let store = Arc::new(FakeStore::default());
+    let q = Queue::connect(&cfg(&addr, extra), store.clone())
+        .await
+        .unwrap();
     let rdb = redis::Client::open(format!("redis://{addr}/"))
         .unwrap()
         .get_multiplexed_async_connection()
@@ -54,6 +60,7 @@ pub async fn env_with(extra: &[(&str, &str)]) -> Env {
         _c: c,
         addr,
         q,
+        store,
         rdb,
     }
 }
@@ -97,5 +104,26 @@ pub async fn pending(rdb: &mut MultiplexedConnection, stream: &str) -> usize {
             _ => 0,
         },
         _ => 0,
+    }
+}
+
+/// Records expired jobs instead of writing Postgres (tests/reaper.rs covers the real Db).
+#[derive(Default)]
+pub struct FakeStore {
+    pub failed: Mutex<Vec<(String, Verdict)>>,
+}
+
+impl ExpiryStore for FakeStore {
+    fn fail_expired<'a>(
+        &'a self,
+        job_id: &'a str,
+        verdict: Verdict,
+        _message: &'a str,
+    ) -> BoxFuture<'a, ae_queue::Result<bool>> {
+        self.failed
+            .lock()
+            .unwrap()
+            .push((job_id.to_owned(), verdict));
+        Box::pin(async { Ok(true) })
     }
 }

@@ -57,20 +57,18 @@ impl Queue {
     /// failure is recorded, so a Redis or DB error leaves it for the reclaimer to retry.
     async fn expire(&self, stream: &str, msg_id: &str, job_id: &str) {
         tracing::warn!(stream, job_id, "queue: dropping expired job");
-        let mut publish = true;
-        if let Some(db) = &self.db {
-            match db
-                .fail_submission(job_id, Verdict::InternalError, EXPIRED_MESSAGE)
-                .await
-            {
-                // false: a verdict is already persisted; do not announce a second one.
-                Ok(updated) => publish = updated,
-                Err(e) => {
-                    tracing::error!(job_id, err = %e, "queue: failing expired job");
-                    return;
-                }
+        // false: a verdict is already persisted; do not announce a second one.
+        let publish = match self
+            .store
+            .fail_expired(job_id, Verdict::InternalError, EXPIRED_MESSAGE)
+            .await
+        {
+            Ok(updated) => updated,
+            Err(e) => {
+                tracing::error!(job_id, err = %e, "queue: failing expired job");
+                return;
             }
-        }
+        };
         if publish {
             let ev = Event::new(
                 job_id,
@@ -135,21 +133,48 @@ impl Queue {
     /// # Errors
     /// Fails on a Redis error.
     pub async fn read_batch(&self) -> Result<Vec<Delivery>> {
-        let mut pipe = redis::pipe();
-        let tiers = [
+        self.read_limited(self.batch_size()).await
+    }
+
+    /// Messages one weighted cycle reads at most.
+    pub(crate) fn batch_size(&self) -> usize {
+        self.tier_counts(usize::MAX).iter().map(|(_, n)| n).sum()
+    }
+
+    /// Per-stream `COUNT`s of one cycle, in weight order, capped at `limit` in total.
+    fn tier_counts(&self, limit: usize) -> Vec<(&str, usize)> {
+        let mut left = limit;
+        let mut out = Vec::new();
+        for (s, w) in [
             (&self.submit, self.submit_weight),
             (&self.run, 1),
             (&self.bulk, self.bulk_weight),
-        ];
-        for (stream, count) in tiers.iter().filter(|(s, _)| !s.is_empty()) {
+        ] {
+            let n = w.min(left);
+            if !s.is_empty() && n > 0 {
+                out.push((s.as_str(), n));
+                left -= n;
+            }
+        }
+        out
+    }
+
+    /// [`read_batch`](Queue::read_batch) reading at most `limit` messages.
+    async fn read_limited(&self, limit: usize) -> Result<Vec<Delivery>> {
+        let tiers = self.tier_counts(limit);
+        if tiers.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut pipe = redis::pipe();
+        for (stream, count) in tiers {
             pipe.cmd("XREADGROUP")
                 .arg("GROUP")
                 .arg(&self.group)
                 .arg(&self.consumer)
                 .arg("COUNT")
-                .arg(*count)
+                .arg(count)
                 .arg("STREAMS")
-                .arg(stream.as_str())
+                .arg(stream)
                 .arg(">");
         }
         let replies: Vec<Option<StreamReadReply>> =
@@ -163,11 +188,7 @@ impl Queue {
 
     /// All streams empty: block up to the read timeout for the next message on any of them.
     async fn block_read(&self, conn: &mut MultiplexedConnection) -> Result<Vec<Delivery>> {
-        let streams: Vec<&str> = self
-            .streams()
-            .into_iter()
-            .filter(|s| !s.is_empty())
-            .collect();
+        let streams = self.streams();
         let mut cmd = redis::cmd("XREADGROUP");
         cmd.arg("GROUP")
             .arg(&self.group)
@@ -211,15 +232,20 @@ impl Queue {
         }
     }
 
-    /// Feeds `tx` until its receiver is dropped. Each cycle is one weighted [`read_batch`];
-    /// when every stream is empty it blocks on all of them (`AC_BLOCK_READ_TIMEOUT`).
-    /// Blocking reads use a dedicated connection so they never stall other commands.
-    ///
-    /// [`read_batch`]: Queue::read_batch
+    /// Feeds `tx` until its receiver is dropped. Each cycle first waits for at least one free
+    /// channel slot and reserves up to one batch of them, then does one weighted read of at
+    /// most that many messages; when every stream is empty it blocks on all of them
+    /// (`AC_BLOCK_READ_TIMEOUT`) for one. A message therefore enters this consumer's pending
+    /// list only when a slot is waiting for it, so time spent behind a full channel never
+    /// counts toward the reclaimer's idle threshold. Blocking reads use a dedicated
+    /// connection so they never stall other commands.
     pub async fn consume(&self, tx: mpsc::Sender<Delivery>) {
         let mut bconn = self.blocking_conn().await;
-        while !tx.is_closed() {
-            let batch = match self.read_batch().await {
+        loop {
+            let Some(mut permits) = reserve(&tx, self.batch_size()).await else {
+                return;
+            };
+            let batch = match self.read_limited(permits.len()).await {
                 Ok(b) if !b.is_empty() => Ok(b),
                 Ok(_) => self.block_read(&mut bconn).await,
                 Err(e) => Err(e),
@@ -227,15 +253,17 @@ impl Queue {
             match batch {
                 Ok(b) => {
                     for d in b {
-                        if tx.send(d).await.is_err() {
-                            return;
+                        // Never more deliveries than permits: every read is capped by them.
+                        if let Some(p) = permits.pop() {
+                            p.send(d);
                         }
                     }
                 }
                 Err(e) => {
                     tracing::error!(err = %e, "queue: read error");
+                    drop(permits);
                     // Recreates groups lost to a Redis restart (NOGROUP).
-                    for s in self.streams().into_iter().filter(|s| !s.is_empty()) {
+                    for s in self.streams() {
                         let _ = self.create_group(s).await;
                     }
                     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -257,12 +285,15 @@ impl Queue {
         let mut conn = self.open_blocking(LEGACY_BLOCK).await?;
         let (mut empty, mut n) = (0, 0);
         while empty < 2 {
+            let Some(mut permits) = reserve(tx, 10).await else {
+                return Ok(n);
+            };
             let reply: Option<StreamReadReply> = redis::cmd("XREADGROUP")
                 .arg("GROUP")
                 .arg(&self.group)
                 .arg("legacy-drain")
                 .arg("COUNT")
-                .arg(10)
+                .arg(permits.len())
                 .arg("BLOCK")
                 .arg(u64::try_from(LEGACY_BLOCK.as_millis()).unwrap_or(2000))
                 .arg("STREAMS")
@@ -283,13 +314,38 @@ impl Queue {
                 empty += 1;
             }
             for d in out {
-                if tx.send(d).await.is_err() {
-                    return Ok(n);
+                if let Some(p) = permits.pop() {
+                    p.send(d);
+                    n += 1;
                 }
-                n += 1;
             }
         }
         tracing::info!(stream = %self.legacy, "legacy stream drained");
         Ok(n)
+    }
+}
+
+/// Waits for one free slot in `tx`, then takes up to `max` without waiting. `None` when the
+/// receiver is gone. Unused permits are released when dropped.
+pub(crate) async fn reserve(
+    tx: &mpsc::Sender<Delivery>,
+    max: usize,
+) -> Option<Vec<mpsc::Permit<'_, Delivery>>> {
+    let mut permits = vec![tx.reserve().await.ok()?];
+    try_reserve_more(tx, max, &mut permits);
+    Some(permits)
+}
+
+/// Adds permits to `permits` without waiting, up to `max` in total.
+pub(crate) fn try_reserve_more<'a>(
+    tx: &'a mpsc::Sender<Delivery>,
+    max: usize,
+    permits: &mut Vec<mpsc::Permit<'a, Delivery>>,
+) {
+    while permits.len() < max {
+        match tx.try_reserve() {
+            Ok(p) => permits.push(p),
+            Err(_) => break,
+        }
     }
 }

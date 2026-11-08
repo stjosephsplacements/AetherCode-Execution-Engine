@@ -45,7 +45,7 @@ fn ids(ds: &[Delivery]) -> Vec<&str> {
 async fn connect_creates_groups_idempotently_and_enqueue_adds_entry() {
     let mut e = env().await;
     // A second connect must not fail on BUSYGROUP.
-    ae_queue::Queue::connect(&common::cfg(&e.addr, &[]))
+    ae_queue::Queue::connect(&common::cfg(&e.addr, &[]), e.store.clone())
         .await
         .unwrap();
     e.q.enqueue(RUN, "job-1").await.unwrap();
@@ -253,6 +253,10 @@ async fn expired_job_is_dropped_acked_and_not_delivered() {
     assert_eq!(last.kind, EventType::Verdict);
     assert!(last.is_terminal());
     assert_eq!(last.data.as_ref().unwrap()["verdict"], "internal_error");
+    assert_eq!(
+        *e.store.failed.lock().unwrap(),
+        [("late".to_owned(), ae_core::model::Verdict::InternalError)]
+    );
     // The reclaimer never resurrects it.
     let (tx, mut rx) = mpsc::channel(4);
     e.q.reclaim_once(&tx, Duration::ZERO).await.unwrap();
@@ -402,4 +406,150 @@ async fn depth_and_oldest_age() {
         age >= Duration::from_secs(5) && age < Duration::from_secs(30),
         "{age:?}"
     );
+}
+
+fn dummy() -> Delivery {
+    Delivery {
+        stream: "x".into(),
+        msg_id: "0-1".into(),
+        job_id: "filler".into(),
+        expires_at: None,
+    }
+}
+
+async fn times_delivered(rdb: &mut redis::aio::MultiplexedConnection, stream: &str) -> Vec<usize> {
+    let r: redis::streams::StreamPendingCountReply = redis::cmd("XPENDING")
+        .arg(stream)
+        .arg("workers")
+        .arg("-")
+        .arg("+")
+        .arg(100)
+        .query_async(rdb)
+        .await
+        .unwrap();
+    r.ids.iter().map(|p| p.times_delivered).collect()
+}
+
+#[tokio::test]
+async fn full_channel_reads_nothing_into_the_pel() {
+    let mut e = env().await;
+    let (tx, mut rx) = mpsc::channel(1);
+    tx.send(dummy()).await.unwrap(); // channel is now full and nobody drains it
+    for i in 0..5 {
+        go_enqueue(&mut e.rdb, RUN, &format!("r{i}")).await;
+    }
+    let q = e.q.clone();
+    let h = tokio::spawn({
+        let tx = tx.clone();
+        async move { q.consume(tx).await }
+    });
+    tokio::time::sleep(Duration::from_millis(800)).await;
+    assert_eq!(
+        pending(&mut e.rdb, RUN).await,
+        0,
+        "read while the channel was full"
+    );
+
+    // A reclaim pass with no free slot claims nothing either.
+    timeout(
+        Duration::from_secs(2),
+        e.q.reclaim_once(&tx, Duration::ZERO),
+    )
+    .await
+    .expect("reclaim blocked on a full channel")
+    .unwrap();
+
+    // Once drained, every job arrives exactly once.
+    assert_eq!(rx.recv().await.unwrap().job_id, "filler");
+    let mut got = Vec::new();
+    for _ in 0..5 {
+        let d = timeout(Duration::from_secs(3), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        got.push(d.job_id);
+    }
+    assert_eq!(got, ["r0", "r1", "r2", "r3", "r4"]);
+    assert!(
+        timeout(Duration::from_millis(300), rx.recv())
+            .await
+            .is_err()
+    );
+    drop(rx);
+    drop(tx);
+    h.await.unwrap();
+}
+
+#[tokio::test]
+async fn reclaim_with_full_channel_leaves_pending_untouched() {
+    let mut e = env().await;
+    go_enqueue(&mut e.rdb, SUBMIT, "held").await;
+    assert_eq!(e.q.read_batch().await.unwrap().len(), 1);
+    let (tx, _rx) = mpsc::channel(1);
+    tx.send(dummy()).await.unwrap();
+    timeout(
+        Duration::from_secs(2),
+        e.q.reclaim_once(&tx, Duration::ZERO),
+    )
+    .await
+    .expect("reclaim blocked on a full channel")
+    .unwrap();
+    assert_eq!(times_delivered(&mut e.rdb, SUBMIT).await, [1]);
+}
+
+#[tokio::test]
+async fn dead_letters_beyond_1000_pending() {
+    const N: usize = 1100;
+    let mut e = env().await;
+    let mut pipe = redis::pipe();
+    for i in 0..N {
+        pipe.cmd("XADD")
+            .arg(SUBMIT)
+            .arg("*")
+            .arg("submission_id")
+            .arg(format!("p{i}"))
+            .ignore();
+    }
+    pipe.query_async::<()>(&mut e.rdb).await.unwrap();
+    let _: redis::Value = redis::cmd("XREADGROUP")
+        .arg("GROUP")
+        .arg("workers")
+        .arg("crashed")
+        .arg("COUNT")
+        .arg(N)
+        .arg("STREAMS")
+        .arg(SUBMIT)
+        .arg(">")
+        .query_async(&mut e.rdb)
+        .await
+        .unwrap();
+    let (tx, mut rx) = mpsc::channel(N);
+    for _ in 0..3 {
+        e.q.reclaim_once(&tx, Duration::ZERO).await.unwrap();
+        let mut n = 0;
+        while rx.try_recv().is_ok() {
+            n += 1;
+        }
+        assert_eq!(n, N);
+    }
+    e.q.reclaim_once(&tx, Duration::ZERO).await.unwrap();
+    assert!(rx.try_recv().is_err());
+    assert_eq!(e.q.poisoned(), N as u64);
+    assert_eq!(pending(&mut e.rdb, SUBMIT).await, 0);
+}
+
+#[tokio::test]
+async fn empty_stream_names_are_skipped() {
+    let e = env().await;
+    let mut c = common::cfg(&e.addr, &[]);
+    c.bulk_stream_name = String::new();
+    let q = ae_queue::Queue::connect(&c, e.store.clone()).await.unwrap();
+    assert_eq!(q.trim_stale(Duration::from_secs(90)).await.unwrap(), 0);
+    let mut rdb = e.rdb.clone();
+    let exists: bool = redis::cmd("EXISTS")
+        .arg("")
+        .query_async(&mut rdb)
+        .await
+        .unwrap();
+    assert!(!exists, "a stream named \"\" was created");
 }

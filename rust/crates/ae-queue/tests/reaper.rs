@@ -75,13 +75,12 @@ async fn reaper_reenqueues_stuck_queued_submissions_on_the_run_stream() {
 }
 
 #[tokio::test]
-async fn expired_job_marks_submission_failed_when_db_attached() {
+async fn expired_job_ends_failed_in_postgres_and_is_never_reaped() {
     let (_pg, db) = pg().await;
     let e = env().await;
-    let q = ae_queue::Queue::connect(&cfg(&e.addr, &[]))
+    let q = ae_queue::Queue::connect(&cfg(&e.addr, &[]), std::sync::Arc::new(db.clone()))
         .await
-        .unwrap()
-        .with_db(db.clone());
+        .unwrap();
     let id = Uuid::new_v4().to_string();
     db.insert_submission(&sub(&id)).await.unwrap();
     let job = Job {

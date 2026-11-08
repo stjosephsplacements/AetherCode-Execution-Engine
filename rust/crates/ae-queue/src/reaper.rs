@@ -11,6 +11,13 @@ impl Queue {
     /// `Db::orphaned_submissions`) onto the run stream with Go's message shape, then touches
     /// `updated_at` so the next pass skips them. Returns how many were re-enqueued.
     ///
+    /// Gap: the re-enqueued message carries no `expires_at`, because the `submissions` table
+    /// stores no deadline (only the stream message did, and the message is what was lost).
+    /// Expired jobs cannot come back this way: expiry at dequeue marks the row `failed`
+    /// through the queue's [`ExpiryStore`](crate::ExpiryStore) before acking, and only
+    /// `queued` rows are reaped. A job whose message vanished before ever being dequeued is
+    /// re-enqueued without a deadline and runs, as in the Go engine.
+    ///
     /// # Errors
     /// Fails when the orphan query fails; per-row failures are logged and skipped.
     pub async fn reap_orphans_once(&self, db: &Db) -> Result<usize> {
