@@ -614,3 +614,34 @@ async fn idle_consumer_leaves_slots_for_the_reclaimer() {
     drop(tx);
     h.await.unwrap();
 }
+
+#[tokio::test]
+async fn blocking_read_delivers_every_entry_it_returns() {
+    let mut e = env().await;
+    // Move the round-robin cursor onto the bulk slot (cycle s,s,s,r,b) while streams are empty.
+    assert!(e.q.read_up_to(4).await.unwrap().is_empty());
+    go_enqueue(&mut e.rdb, SUBMIT, "s").await;
+    go_enqueue(&mut e.rdb, RUN, "r").await;
+    let (tx, mut rx) = mpsc::channel(2);
+    tx.send(dummy()).await.unwrap(); // one slot free
+    let q = e.q.clone();
+    let h = tokio::spawn({
+        let tx = tx.clone();
+        async move { q.consume(tx).await }
+    });
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(rx.recv().await.unwrap().job_id, "filler");
+    let mut got = Vec::new();
+    for _ in 0..2 {
+        let d = timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("an entry read by the blocking read was never delivered")
+            .unwrap();
+        got.push(d.job_id);
+    }
+    got.sort();
+    assert_eq!(got, ["r", "s"]);
+    drop(rx);
+    drop(tx);
+    h.await.unwrap();
+}

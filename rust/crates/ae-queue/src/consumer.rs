@@ -279,11 +279,17 @@ impl Queue {
             };
             match batch {
                 Ok(b) => {
-                    for d in b {
-                        // Never more deliveries than permits: every read is capped by them.
-                        if let Some(p) = permits.pop() {
-                            p.send(d);
+                    // A blocking read applies COUNT per stream, so it can return one entry per
+                    // stream while only one slot is held: wait for a slot for each extra entry
+                    // so nothing read is left pending undelivered.
+                    while permits.len() < b.len() {
+                        match tx.reserve().await {
+                            Ok(p) => permits.push(p),
+                            Err(_) => return,
                         }
+                    }
+                    for (d, p) in b.into_iter().zip(permits) {
+                        p.send(d);
                     }
                 }
                 Err(e) => {
@@ -312,7 +318,7 @@ impl Queue {
         let mut conn = self.open_blocking(LEGACY_BLOCK).await?;
         let (mut empty, mut n) = (0, 0);
         while empty < 2 {
-            let Some(mut permits) = reserve(tx, 10).await else {
+            let Some(permits) = reserve(tx, 10).await else {
                 return Ok(n);
             };
             let reply: Option<StreamReadReply> = redis::cmd("XREADGROUP")
@@ -340,11 +346,11 @@ impl Queue {
             } else {
                 empty += 1;
             }
-            for d in out {
-                if let Some(p) = permits.pop() {
-                    p.send(d);
-                    n += 1;
-                }
+            // COUNT = permits.len() on a single stream, so out.len() <= permits.len().
+            debug_assert!(out.len() <= permits.len());
+            for (d, p) in out.into_iter().zip(permits) {
+                p.send(d);
+                n += 1;
             }
         }
         tracing::info!(stream = %self.legacy, "legacy stream drained");

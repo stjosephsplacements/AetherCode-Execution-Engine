@@ -100,9 +100,12 @@ impl Queue {
                     if let Entry::Deliver(d) = self.admit(stream, m).await {
                         tracing::info!(stream, job_id = %d.job_id, msg_id = %d.msg_id,
                             delivery_count = count, "reclaimer: reprocessing");
-                        // Claimed at most permits.len(), so a permit is always left.
-                        if let Some(p) = permits.pop() {
-                            p.send(d);
+                        // XAUTOCLAIM COUNT = permits.len() bounds the claimed entries, so a
+                        // permit is always left; never drop an entry silently regardless.
+                        match permits.pop() {
+                            Some(p) => p.send(d),
+                            None => tracing::error!(stream, msg_id = %d.msg_id,
+                                "reclaimer: claimed more entries than free slots; left pending"),
                         }
                     }
                 }
