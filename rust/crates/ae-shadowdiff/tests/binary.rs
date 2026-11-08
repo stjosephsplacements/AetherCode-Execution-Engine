@@ -102,7 +102,14 @@ async fn go_row(e: &Env, v: Option<Verdict>) -> String {
     id
 }
 
-async fn shadow(e: &mut Env, id: &str, v: Verdict, results: &[TestResult], stderr: &str) {
+async fn shadow_at(
+    e: &mut Env,
+    id: &str,
+    v: Verdict,
+    results: &[TestResult],
+    stderr: &str,
+    recorded_at: i64,
+) {
     let passed = results
         .iter()
         .filter(|r| r.verdict == Verdict::Accepted)
@@ -110,9 +117,13 @@ async fn shadow(e: &mut Env, id: &str, v: Verdict, results: &[TestResult], stder
     let body = json!({
         "job_id": id, "engine": "rust", "verdict": v, "tests_passed": passed,
         "test_count": results.len(), "results": results, "compile_stderr": stderr,
-        "recorded_at": 0,
+        "recorded_at": recorded_at,
     });
     set(e, &format!("ac:shadow:{id}"), &body.to_string()).await;
+}
+
+async fn shadow(e: &mut Env, id: &str, v: Verdict, results: &[TestResult], stderr: &str) {
+    shadow_at(e, id, v, results, stderr, 0).await;
 }
 
 async fn set(e: &mut Env, key: &str, val: &str) {
@@ -162,7 +173,9 @@ async fn binary_summary_and_exit_codes() {
     let (code, out) = run(&e, &[]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("compared=0 matched=0 diff=0 pending=1 ignored=0 unreadable=0"),
+        out.contains(
+            "compared=0 matched=0 diff=0 pending=1 ignored=0 unreadable=0 skipped_since=0"
+        ),
         "{out}"
     );
     assert!(out.contains(&format!("PENDING {p}")), "{out}");
@@ -199,7 +212,9 @@ async fn binary_summary_and_exit_codes() {
     let (code, out) = run(&e, &[]);
     assert_eq!(code, 1, "{out}");
     assert!(
-        out.contains("compared=2 matched=1 diff=1 pending=1 ignored=1 unreadable=1"),
+        out.contains(
+            "compared=2 matched=1 diff=1 pending=1 ignored=1 unreadable=1 skipped_since=0"
+        ),
         "{out}"
     );
     assert!(
@@ -217,7 +232,9 @@ async fn binary_summary_and_exit_codes() {
     let (code, out) = run(&e, &[]);
     assert_eq!(code, 0, "{out}");
     assert!(
-        out.contains("compared=1 matched=1 diff=0 pending=1 ignored=1 unreadable=0"),
+        out.contains(
+            "compared=1 matched=1 diff=0 pending=1 ignored=1 unreadable=0 skipped_since=0"
+        ),
         "{out}"
     );
     assert!(!out.contains("PENDING"), "{out}");
@@ -237,4 +254,92 @@ async fn binary_summary_and_exit_codes() {
     .await;
     let (code, out) = run(&e, &["--fail-on-pending"]);
     assert_eq!(code, 0, "{out}");
+}
+
+#[tokio::test]
+async fn binary_refuses_empty_and_all_ignored_runs() {
+    let mut e = env().await;
+    let (code, out) = run(&e, &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(out.contains("refusing to report parity"), "{out}");
+    assert!(
+        out.contains(
+            "compared=0 matched=0 diff=0 pending=0 ignored=0 unreadable=0 skipped_since=0"
+        ),
+        "{out}"
+    );
+    let (code, out) = run(&e, &["--allow-empty"]);
+    assert_eq!(code, 0, "{out}");
+
+    let g = go_row(&e, Some(Verdict::Accepted)).await;
+    shadow(
+        &mut e,
+        &g,
+        Verdict::InternalError,
+        &[],
+        &tests_gone_message(&g),
+    )
+    .await;
+    let (code, out) = run(&e, &[]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("ignored=1") && out.contains("refusing"),
+        "{out}"
+    );
+    let (code, _) = run(&e, &["--allow-empty"]);
+    assert_eq!(code, 0);
+}
+
+#[tokio::test]
+async fn binary_since_counts_skipped_and_flags_missing_timestamp() {
+    let mut e = env().await;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let ok = go_row(&e, Some(Verdict::Accepted)).await;
+    shadow_at(
+        &mut e,
+        &ok,
+        Verdict::Accepted,
+        &[result(Verdict::Accepted)],
+        "",
+        now,
+    )
+    .await;
+    let old = go_row(&e, Some(Verdict::Accepted)).await;
+    shadow_at(
+        &mut e,
+        &old,
+        Verdict::Accepted,
+        &[result(Verdict::Accepted)],
+        "",
+        now - 7_200_000,
+    )
+    .await;
+    let (code, out) = run(&e, &["--since", "1h"]);
+    assert_eq!(code, 0, "{out}");
+    assert!(
+        out.contains(
+            "compared=1 matched=1 diff=0 pending=0 ignored=0 unreadable=0 skipped_since=1"
+        ),
+        "{out}"
+    );
+
+    let none = go_row(&e, Some(Verdict::Accepted)).await;
+    shadow_at(
+        &mut e,
+        &none,
+        Verdict::Accepted,
+        &[result(Verdict::Accepted)],
+        "",
+        0,
+    )
+    .await;
+    let (code, out) = run(&e, &["--since", "1h"]);
+    assert_eq!(code, 1, "{out}");
+    assert!(
+        out.contains("unreadable=1 skipped_since=1") && out.contains(&format!("UNREADABLE {none}")),
+        "{out}"
+    );
 }

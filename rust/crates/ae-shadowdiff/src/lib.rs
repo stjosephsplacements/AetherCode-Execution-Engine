@@ -21,7 +21,6 @@ pub struct ShadowRecord {
     #[serde(default)]
     pub compile_stderr: String,
     /// Unix milliseconds.
-    #[serde(default)]
     pub recorded_at: i64,
 }
 
@@ -124,6 +123,8 @@ pub struct Summary {
     pub ignored: usize,
     /// Shadow records that could not be parsed; nothing was compared for them.
     pub unreadable: usize,
+    /// Records older than `--since`; not compared.
+    pub skipped_since: usize,
 }
 
 impl Summary {
@@ -145,18 +146,53 @@ impl Summary {
     #[must_use]
     pub fn line(&self) -> String {
         format!(
-            "compared={} matched={} diff={} pending={} ignored={} unreadable={}",
-            self.compared, self.matched, self.diff, self.pending, self.ignored, self.unreadable
+            "compared={} matched={} diff={} pending={} ignored={} unreadable={} skipped_since={}",
+            self.compared,
+            self.matched,
+            self.diff,
+            self.pending,
+            self.ignored,
+            self.unreadable,
+            self.skipped_since
         )
     }
 
-    /// Fail closed: a diff, an unreadable record, or a run that compared nothing while
-    /// jobs were pending (for instance `--pg` connected as an RLS-limited role that sees
-    /// no rows) is a failure; `fail_on_pending` makes any pending job one too.
+    /// Fewer than `min_compared` records compared: parity cannot be claimed.
     #[must_use]
-    pub fn failed(&self, fail_on_pending: bool) -> bool {
+    pub fn too_few(&self, min_compared: usize) -> bool {
+        self.compared < min_compared
+    }
+
+    /// Fail closed: a diff, an unreadable record, fewer than `min_compared` compared
+    /// records (an empty or mis-pointed run), or a run that compared nothing while jobs
+    /// were pending (for instance `--pg` connected as an RLS-limited role that sees no
+    /// rows) is a failure; `fail_on_pending` makes any pending job one too.
+    #[must_use]
+    pub fn failed(&self, fail_on_pending: bool, min_compared: usize) -> bool {
         self.diff > 0
             || self.unreadable > 0
+            || self.too_few(min_compared)
             || self.pending > 0 && (fail_on_pending || self.compared == 0)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum Since {
+    Keep,
+    /// Older than the cutoff.
+    Skip,
+    /// No usable timestamp, so age cannot be judged.
+    Unreadable,
+}
+
+/// Applies `--since` (`cutoff` in Unix ms) to a record; a record without a positive
+/// `recorded_at` is unreadable rather than silently dropped.
+#[must_use]
+pub fn since_filter(rec: &ShadowRecord, cutoff: Option<i64>) -> Since {
+    match cutoff {
+        None => Since::Keep,
+        Some(_) if rec.recorded_at <= 0 => Since::Unreadable,
+        Some(c) if rec.recorded_at < c => Since::Skip,
+        Some(_) => Since::Keep,
     }
 }

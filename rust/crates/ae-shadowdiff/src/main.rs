@@ -1,7 +1,7 @@
 //! `shadowdiff --redis <url> --pg <url> [--since <dur>]`: exit 1 when any shadow
 //! record differs from the Go engine's result, 0 otherwise.
 
-use ae_shadowdiff::{Outcome, ShadowRecord, Summary, compare};
+use ae_shadowdiff::{Outcome, ShadowRecord, Since, Summary, compare, since_filter};
 use clap::Parser;
 use std::collections::{HashMap, HashSet};
 use std::process::ExitCode;
@@ -22,6 +22,13 @@ struct Args {
     /// Exit 1 when any job has no finished Go result yet (and list the job ids).
     #[arg(long)]
     fail_on_pending: bool,
+    /// Fail (exit 1) when fewer than this many records were compared, so an empty or
+    /// mis-pointed run cannot report parity.
+    #[arg(long, default_value_t = 1)]
+    min_compared: usize,
+    /// Accept a run that compared nothing (same as --min-compared 0).
+    #[arg(long)]
+    allow_empty: bool,
     /// Only records written within this long ago (e.g. 30m, 1h).
     #[arg(long, value_parser = humantime::parse_duration)]
     since: Option<Duration>,
@@ -97,8 +104,18 @@ async fn run(a: Args) -> Result<bool, String> {
                     continue;
                 }
             };
-            if cutoff.is_some_and(|c| rec.recorded_at < c) {
-                continue;
+            match since_filter(&rec, cutoff) {
+                Since::Keep => {}
+                Since::Skip => {
+                    sum.skipped_since += 1;
+                    continue;
+                }
+                Since::Unreadable => {
+                    eprintln!("{key}: missing recorded_at, cannot apply --since");
+                    sum.unreadable += 1;
+                    unreadable_ids.push(rec.job_id.clone());
+                    continue;
+                }
             }
             let sub = db
                 .get_submission(&rec.job_id)
@@ -131,7 +148,14 @@ async fn run(a: Args) -> Result<bool, String> {
     for id in &unreadable_ids {
         println!("UNREADABLE {id}");
     }
-    let failed = sum.failed(a.fail_on_pending);
+    let min = if a.allow_empty { 0 } else { a.min_compared };
+    let failed = sum.failed(a.fail_on_pending, min);
+    if sum.too_few(min) {
+        println!(
+            "no records compared (compared={}, required {min}); refusing to report parity",
+            sum.compared
+        );
+    }
     if sum.pending > 0 && (a.fail_on_pending || sum.compared == 0) {
         for id in &pending_ids {
             println!("PENDING {id}");

@@ -1,5 +1,7 @@
 use ae_core::model::{DEFAULT_TENANT_ID, Status, Submission, TestResult, Verdict};
-use ae_shadowdiff::{Outcome, ShadowRecord, Summary, compare, tests_gone_message};
+use ae_shadowdiff::{
+    Outcome, ShadowRecord, Since, Summary, compare, since_filter, tests_gone_message,
+};
 
 fn tr(i: i32, v: Verdict, cpu: i64, mem: i64) -> TestResult {
     TestResult {
@@ -124,16 +126,16 @@ fn unreadable_and_all_pending_fail_closed() {
         unreadable: 1,
         ..Summary::default()
     };
-    assert!(u.failed(false));
+    assert!(u.failed(false, 0));
     let mut p = Summary::default();
     p.add(&Outcome::Pending);
-    assert!(p.failed(false), "compared == 0 with pending must fail");
+    assert!(p.failed(false, 0), "compared == 0 with pending must fail");
     let mut ok = Summary::default();
     ok.add(&Outcome::Match);
     ok.add(&Outcome::Pending);
-    assert!(!ok.failed(false));
-    assert!(ok.failed(true));
-    assert!(!Summary::default().failed(true));
+    assert!(!ok.failed(false, 0));
+    assert!(ok.failed(true, 0));
+    assert!(!Summary::default().failed(true, 0));
 }
 
 #[test]
@@ -147,6 +149,32 @@ fn pending_is_not_a_diff() {
     assert_eq!(sum.diff, 0);
     assert_eq!(
         sum.line(),
-        "compared=0 matched=0 diff=0 pending=1 ignored=0 unreadable=0"
+        "compared=0 matched=0 diff=0 pending=1 ignored=0 unreadable=0 skipped_since=0"
     );
+}
+
+#[test]
+fn empty_runs_fail_closed_unless_allowed() {
+    let empty = Summary::default();
+    assert!(empty.failed(false, 1), "nothing compared must fail");
+    assert!(!empty.failed(false, 0), "--allow-empty");
+    let mut ignored = Summary::default();
+    ignored.add(&Outcome::Ignored);
+    assert!(ignored.failed(false, 1), "all ignored must fail");
+    let mut one = Summary::default();
+    one.add(&Outcome::Match);
+    assert!(!one.failed(false, 1));
+    assert!(one.failed(false, 2), "--min-compared 2");
+}
+
+#[test]
+fn since_counts_skips_and_rejects_missing_timestamps() {
+    let mut r = rec(Verdict::Accepted, vec![], "");
+    assert_eq!(since_filter(&r, None), Since::Keep);
+    r.recorded_at = 0;
+    assert_eq!(since_filter(&r, Some(1000)), Since::Unreadable);
+    r.recorded_at = 999;
+    assert_eq!(since_filter(&r, Some(1000)), Since::Skip);
+    r.recorded_at = 1000;
+    assert_eq!(since_filter(&r, Some(1000)), Since::Keep);
 }

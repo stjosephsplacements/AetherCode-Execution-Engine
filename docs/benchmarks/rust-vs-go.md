@@ -109,7 +109,11 @@ environment when a URL holds a password.
 
 The tool fails closed. Exit 1 on any diff, any unreadable shadow record, or when nothing was
 compared while jobs are pending; `--fail-on-pending` also fails on any pending job and lists
-their ids. Exit 0 and `diff=0 unreadable=0` is required. `pending` (Go not finished) and `ignored` (the tests hash
+their ids. It also refuses to report parity when fewer than `--min-compared` (default 1) records were
+compared, so an empty or mis-pointed run, or one where everything was ignored, exits 1;
+`--allow-empty` accepts such a run. `--since` counts the records it drops as
+`skipped_since`, and a record without a `recorded_at` is `unreadable`. Exit 0 with
+`diff=0 unreadable=0` and `compared` above zero is required. `pending` (Go not finished) and `ignored` (the tests hash
 had expired) are reported separately and are not diffs; rerun until `pending=0`.
 
 ## Results (to be filled by the repo owner on the 256-core server)
@@ -125,7 +129,7 @@ had expired) are reported separately and are not diffs; rerun until `pending=0`.
 | 1000 | Rust | cold | | | | | | |
 | 1000 | Rust | warm | | | | | | |
 
-Shadow parity result (`compared/matched/diff/pending/ignored`):
+Shadow parity result (`compared/matched/diff/pending/ignored/unreadable/skipped_since`):
 
 ## Smoke test (not a benchmark)
 
