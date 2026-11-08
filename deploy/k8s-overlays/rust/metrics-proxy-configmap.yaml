@@ -1,0 +1,30 @@
+# The engine binds metrics to 127.0.0.1:${AC_DEBUG_PORT} and has no flag to change that.
+# This nginx sidecar shares the pod's network namespace and exposes only /metrics on 9090
+# so Prometheus (and the worker liveness probe, since worker pods serve no public HTTP)
+# can reach it. It answers 502 while the engine is down.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aethercode-exec-rs-metrics-proxy
+  namespace: aethercode
+data:
+  nginx.conf: |
+    worker_processes 1;
+    pid /tmp/nginx.pid;
+    error_log /dev/stderr warn;
+    events { worker_connections 64; }
+    http {
+      access_log off;
+      client_body_temp_path /tmp/client_temp;
+      proxy_temp_path /tmp/proxy_temp;
+      fastcgi_temp_path /tmp/fastcgi_temp;
+      uwsgi_temp_path /tmp/uwsgi_temp;
+      scgi_temp_path /tmp/scgi_temp;
+      server {
+        listen 9090;
+        location = /metrics {
+          proxy_pass http://127.0.0.1:6060/metrics;
+        }
+        location / { return 404; }
+      }
+    }

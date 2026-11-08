@@ -13,6 +13,10 @@ permissions:
   id-token: write     # SLSA provenance attestation
   attestations: write # attest artifacts
 
+# NOTE: the Rust engine image (rust/Dockerfile) is intentionally NOT published here
+# yet. It is built (not pushed) by rust.yml and stays out of releases until the Go
+# engine is cut over; publishing will be a separate image name, aethercode-exec-rs.
+
 jobs:
   release:
     runs-on: ubuntu-latest

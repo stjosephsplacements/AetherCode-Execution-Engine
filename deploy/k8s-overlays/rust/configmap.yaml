@@ -1,0 +1,15 @@
+# Rust-only settings. Stream names, consumer group, rate limits and the rest come from
+# aethercode-exec-config, shared with the Go engine so a cutover is a scale change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aethercode-exec-rs-config
+  namespace: aethercode
+data:
+  AC_WORKERS: "16"             # concurrency budget per worker pod (0 = a quarter of the cores)
+  AC_COMPILE_CACHE_MAX_MB: "512"
+  AC_PREWARM: "16"
+  AC_DEBUG_PORT: "6060"        # loopback only; reached through the metrics-proxy sidecar
+  AC_LOG_FORMAT: "json"
+  AC_LOG_LEVEL: "info"
+  # AC_OTLP_ENDPOINT: "http://otel-collector:4318"

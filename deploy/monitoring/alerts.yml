@@ -118,3 +118,60 @@ groups:
             Expected when every job carries different source. If one source is
             sent as many jobs (one per test), check that the caller is not
             defeating the compile cache.
+
+  # Rust engine (rust/Dockerfile). Scrape it as job "aethercode-exec-rs" through the
+  # metrics sidecar (deploy/k8s-overlays/rust): the engine binds metrics to 127.0.0.1 only.
+  - name: aethercode-exec-rs
+    rules:
+      - alert: RustEngineDown
+        expr: up{job="aethercode-exec-rs"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rust engine pod {{ $labels.instance }} cannot be scraped"
+          description: >
+            The metrics sidecar or the engine behind it is not answering. Check
+            the pod, its logs and /readyz.
+
+      # The oldest entry's age is the autoscaling signal (HPA target is 10s); this
+      # fires when scaling cannot keep up.
+      - alert: RustQueueAgeHigh
+        expr: max by (stream) (ac_queue_age_seconds{job="aethercode-exec-rs"}) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest entry in {{ $labels.stream }} has waited {{ $value }}s"
+          description: >
+            Workers are not draining the stream fast enough. Check the worker
+            HPA (maxReplicas reached?), go-judge capacity and the scheduler
+            budget.
+
+      # Misses are the compile-duration histogram count (it is only observed on a miss).
+      - alert: RustCompileCacheHitRatioLow
+        expr: >
+          sum(rate(ac_compile_cache_hits_total{job="aethercode-exec-rs"}[30m]))
+          / (sum(rate(ac_compile_cache_hits_total{job="aethercode-exec-rs"}[30m]))
+             + sum(rate(ac_compile_duration_seconds_count{job="aethercode-exec-rs"}[30m]))) < 0.1
+          and sum(rate(ac_compile_duration_seconds_count{job="aethercode-exec-rs"}[30m])) > 0.5
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Compile cache hit ratio below 10%"
+          description: >
+            Expected when every job carries different source. If one source is
+            sent as many jobs, check the caller and AC_COMPILE_CACHE_MAX_MB.
+
+      - alert: RustSchedulerBudgetSaturated
+        expr: ac_scheduler_budget_used{job="aethercode-exec-rs"} > 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.resource }} scheduler budget above 95% on {{ $labels.instance }}"
+          description: >
+            The worker has used its whole {{ $labels.resource }} budget for 10
+            minutes; jobs queue behind it. Raise AC_WORKERS and the pod limits,
+            or add replicas.

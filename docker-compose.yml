@@ -83,6 +83,69 @@ services:
       timeout: 3s
       retries: 30
 
+  # Rust engine (distroless image: no shell or curl, hence no container healthcheck).
+  #   docker compose --profile rust up --build engine-rs        # API on http://127.0.0.1:5101
+  # Own submit/run/bulk streams so it never competes with the Go engine's consumers.
+  # Probes: /livez and /readyz on 5101. Metrics are bound to the container's loopback only.
+  engine-rs:
+    profiles: ["rust"]
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      args:
+        COMMIT_SHA: "${COMMIT_SHA:-dev}"
+    image: aethercode-exec-rs:dev
+    environment:
+      AC_GATEWAY_ADDR: "0.0.0.0:5100"
+      AC_DATABASE_URL: "postgres://${POSTGRES_USER:-aethercode}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-aethercode_exec}"
+      AC_REDIS_ADDR: "redis:6379"
+      AC_JUDGE_URL: "http://go-judge:5050"
+      AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN}"
+      AC_WORKERS: "${AC_WORKERS:-8}"
+      AC_ROLE: "${AC_ROLE:-all}"
+      AC_AUTH_ENABLED: "${AC_AUTH_ENABLED:-false}"
+      AC_ALLOW_UNAUTH: "true"
+      AC_LOG_FORMAT: "text"
+      AC_SUBMIT_STREAM: "ac:rs:submissions:submit"
+      AC_RUN_STREAM: "ac:rs:submissions:run"
+      AC_BULK_STREAM: "ac:rs:submissions:bulk"
+    ports:
+      - "5101:5100"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      go-judge:
+        condition: service_started
+
+  # Compare-only worker beside the Go engine: reads the Go engine's streams through its own
+  # consumer group and writes verdicts to ac:shadow:<job_id> only (no Postgres, events or webhooks).
+  #   docker compose --profile rust-shadow up --build engine-rs-shadow
+  engine-rs-shadow:
+    profiles: ["rust-shadow"]
+    build:
+      context: .
+      dockerfile: rust/Dockerfile
+      args:
+        COMMIT_SHA: "${COMMIT_SHA:-dev}"
+    image: aethercode-exec-rs:dev
+    command: ["--role", "worker", "--shadow"]
+    environment:
+      AC_DATABASE_URL: "postgres://${POSTGRES_USER:-aethercode}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-aethercode_exec}"
+      AC_REDIS_ADDR: "redis:6379"
+      AC_JUDGE_URL: "http://go-judge:5050"
+      AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN}"
+      AC_WORKERS: "${AC_WORKERS:-8}"
+      AC_LOG_FORMAT: "text"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      go-judge:
+        condition: service_started
+
 volumes:
   db-data:
   gojudge-data:

@@ -48,6 +48,25 @@ gofmt -s -w .
 golangci-lint run ./...
 ```
 
+### Rust engine (`rust/`, run from `rust/`; toolchain pinned in `rust-toolchain.toml`)
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace            # integration tests start Postgres/Redis via Docker (testcontainers)
+cargo deny check && cargo audit
+
+# Fuzz (cargo-fuzz, nightly): targets in rust/fuzz/fuzz_targets
+cargo +nightly fuzz run normalize_output -- -max_total_time=30
+cargo +nightly fuzz run judge_output -- -max_total_time=30
+
+# Image (context = repo root) and compose profiles
+docker build -f rust/Dockerfile -t aethercode-exec-rs:dev .
+docker compose --profile rust up --build engine-rs
+```
+
+The Go engine stays in service through shadow and cutover: do not remove or break the Go code, image or manifests.
+
 ---
 
 ## Deployment & Production

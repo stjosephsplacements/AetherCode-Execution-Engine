@@ -1,0 +1,71 @@
+# Gateway: CPU. Workers: age of the oldest queue entry (ac_queue_age_seconds).
+#
+# The worker HPA needs the external metrics API (external.metrics.k8s.io). Either:
+#  1. Prometheus Adapter with a rule like
+#       externalRules:
+#         - seriesQuery: 'ac_queue_age_seconds{job="aethercode-exec-rs"}'
+#           resources: {namespaced: false}
+#           name: {as: "ac_queue_age_seconds"}
+#           metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (stream)'
+#     (max, not sum: every pod samples the same stream, so the series are duplicates), or
+#  2. KEDA: replace this HPA with a ScaledObject using a prometheus trigger on
+#     max(ac_queue_age_seconds{stream="ac:submissions:submit"}) with threshold 10.
+# Without one of them this HPA reports "unable to get external metric" and holds its replicas.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aethercode-exec-rs-worker-hpa
+  namespace: aethercode
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: aethercode-exec-rs-worker
+  minReplicas: 2
+  maxReplicas: 20
+  metrics:
+    - type: External
+      external:
+        metric:
+          name: ac_queue_age_seconds
+          selector:
+            matchLabels:
+              stream: ac:submissions:submit
+        target:
+          type: Value
+          value: "10"   # seconds the oldest submission may wait
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300  # pods drain for up to 120 s; scale in slowly
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 120
+    scaleUp:
+      policies:
+        - type: Pods
+          value: 4
+          periodSeconds: 30
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: aethercode-exec-rs-gateway-hpa
+  namespace: aethercode
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: aethercode-exec-rs-gateway
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300

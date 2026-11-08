@@ -9,10 +9,14 @@ on:
       - "fix/**"
     paths:
       - "rust/**"
+      - "migrations/**"
+      - ".dockerignore"
       - ".github/workflows/rust.yml"
   pull_request:
     paths:
       - "rust/**"
+      - "migrations/**"
+      - ".dockerignore"
       - ".github/workflows/rust.yml"
 
 permissions:
@@ -60,3 +64,15 @@ jobs:
 
       - name: Audit
         run: cargo audit
+
+  # Build only: the Rust image is deliberately not pushed or released yet (see release.yml).
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build -f rust/Dockerfile --build-arg COMMIT_SHA="${GITHUB_SHA}" -t aethercode-exec-rs:ci .
+
+      - name: Smoke test
+        run: docker run --rm aethercode-exec-rs:ci --help

@@ -1,0 +1,76 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aethercode-exec-rs-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aethercode-exec-rs
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Gateway HTTP and the metrics-proxy sidecar (the engine's own 6060 is loopback-only)
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 5100
+        - protocol: TCP
+          port: 9090
+  egress:
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-judge
+      ports:
+        - protocol: TCP
+          port: 5050
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # OIDC issuer / OTLP over TLS; narrow to the IdP's CIDR as in the Go policy.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# go-judge only admits aethercode-exec (Go); additive policy admitting the Rust pods.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-judge-allow-rust-engine
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: go-judge
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aethercode-exec-rs
+      ports:
+        - protocol: TCP
+          port: 5050

@@ -103,6 +103,13 @@ curl -fsSL http://127.0.0.1:5100/api/v1/health | jq .
 make down
 ```
 
+The Rust engine (see `docs/ARCHITECTURE.md`, "Rust engine") runs beside it under a compose profile on port 5101:
+
+```bash
+docker compose --profile rust up --build engine-rs
+curl -fsS http://127.0.0.1:5101/readyz
+```
+
 > **Security Note:** In the local development compose file, the sandbox container runs with `privileged: true` solely to mount cgroups and configure nested namespaces on dev kernels. For bare-metal or cloud production deployments, run go-judge directly as a dedicated unprivileged system daemon or Kubernetes pod with configured cgroups v2 controllers.
 
 ### Local Source Compilation
