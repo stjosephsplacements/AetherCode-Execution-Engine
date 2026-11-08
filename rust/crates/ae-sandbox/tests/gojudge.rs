@@ -279,3 +279,20 @@ async fn probe_languages_reports_a_sandbox_failure() {
             .is_err()
     );
 }
+
+#[test]
+fn non_http_judge_url_is_a_config_error() {
+    for url in ["https://judge:5050", "unix:///run/judge.sock", "judge:5050"] {
+        let m: HashMap<String, String> = [("AC_JUDGE_URL".to_owned(), url.to_owned())].into();
+        let err = GoJudge::new(&Config::from_map(&m).unwrap()).unwrap_err();
+        assert!(matches!(err, ae_sandbox::Error::Config(_)), "{url}: {err}");
+    }
+}
+
+#[test]
+fn zero_collector_max_is_omitted_like_go() {
+    let v = serde_json::to_value(CmdFile::collector("stdout", 0)).unwrap();
+    assert_eq!(v, serde_json::json!({"name": "stdout"}));
+    let v = serde_json::to_value(CmdFile::collector("stdout", 5)).unwrap();
+    assert_eq!(v, serde_json::json!({"name": "stdout", "max": 5}));
+}

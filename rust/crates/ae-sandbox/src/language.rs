@@ -85,7 +85,7 @@ pub struct CmdTemplate {
 /// Where the source and compiled binary live inside the sandbox.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct Overlay {
+pub struct Placement {
     pub source: Option<String>,
     pub binary: Option<String>,
     /// The source is delivered on stdin instead of as a file (SQLite).
@@ -100,7 +100,7 @@ pub struct Language {
     pub compiler: Vec<String>,
     pub compile: Option<CmdTemplate>,
     pub run: CmdTemplate,
-    pub overlay: Overlay,
+    pub placement: Placement,
     /// Concurrent tests per job; `None` is unbounded.
     pub parallelism: Option<usize>,
     pub allowed_flags: Vec<String>,
@@ -115,7 +115,7 @@ struct LangDef {
     compile_cmd: Option<CmdTemplate>,
     execute_cmd: CmdTemplate,
     #[serde(default)]
-    overlay: Overlay,
+    placement: Placement,
     parallelism: Option<usize>,
     #[serde(default)]
     allowed_flags: Vec<String>,
@@ -159,7 +159,7 @@ impl Language {
             out.push(c.args[0].as_str());
         }
         let r = self.run.args[0].as_str();
-        if Some(r) != self.overlay.binary.as_deref() {
+        if Some(r) != self.placement.binary.as_deref() {
             out.push(r);
         }
         out
@@ -204,7 +204,7 @@ impl Languages {
                 compiler: d.compiler,
                 compile: d.compile_cmd,
                 run: d.execute_cmd,
-                overlay: d.overlay,
+                placement: d.placement,
                 parallelism: d.parallelism,
                 allowed_flags: d.allowed_flags,
                 hello: d.hello,
@@ -243,14 +243,14 @@ fn check(l: &Language) -> Result<(), String> {
     if l.parallelism == Some(0) {
         return Err("parallelism must be at least 1 (omit it for unbounded)".into());
     }
-    if !in_w(&l.overlay.source) || !in_w(&l.overlay.binary) {
-        return Err("overlay paths must be under /w/".into());
+    if !in_w(&l.placement.source) || !in_w(&l.placement.binary) {
+        return Err("placement paths must be under /w/".into());
     }
-    if l.overlay.source.is_none() && !l.overlay.stdin_is_source {
-        return Err("overlay needs a source path or stdin_is_source".into());
+    if l.placement.source.is_none() && !l.placement.stdin_is_source {
+        return Err("placement needs a source path or stdin_is_source".into());
     }
-    if l.compile.is_some() && (l.overlay.binary.is_none() || l.overlay.source.is_none()) {
-        return Err("a compiled language needs overlay source and binary paths".into());
+    if l.compile.is_some() && (l.placement.binary.is_none() || l.placement.source.is_none()) {
+        return Err("a compiled language needs placement source and binary paths".into());
     }
     for t in l.compile.iter().chain(std::iter::once(&l.run)) {
         if t.args.is_empty() || t.args[0].is_empty() {
@@ -332,7 +332,7 @@ pub fn compile_cmd(
     args.extend(flags.iter().cloned());
 
     let mut copy_in = BTreeMap::new();
-    if let Some(src) = &lang.overlay.source {
+    if let Some(src) = &lang.placement.source {
         copy_in.insert(src.clone(), CopyIn::content(source));
     }
     for (name, content) in extra_files {
@@ -353,14 +353,14 @@ pub fn compile_cmd(
         stack_limit: 0,
         copy_in,
         copy_out: vec!["stdout".into(), "stderr".into()],
-        copy_out_cached: lang.overlay.binary.iter().cloned().collect(),
+        copy_out_cached: lang.placement.binary.iter().cloned().collect(),
     })
 }
 
 /// No-op command that uploads interpreted source into the file cache so a batch
 /// of runs can reference it by id. `None` when the source is delivered on stdin.
 pub fn cache_source_cmd(lang: &Language, source: &str) -> Option<Cmd> {
-    let src = lang.overlay.source.as_ref()?;
+    let src = lang.placement.source.as_ref()?;
     Some(Cmd {
         args: vec!["/bin/true".into()],
         env: Vec::new(),
@@ -392,17 +392,17 @@ pub fn run_cmd(lang: &Language, input: &RunInput<'_>, caps: OutputCaps) -> Cmd {
     let mut copy_in = BTreeMap::new();
     if let Some(id) = input.file_id {
         let target = if lang.is_compiled() {
-            &lang.overlay.binary
+            &lang.placement.binary
         } else {
-            &lang.overlay.source
+            &lang.placement.source
         };
         if let Some(t) = target {
             copy_in.insert(t.clone(), CopyIn::file_id(&id.0));
         }
-    } else if lang.overlay.stdin_is_source {
+    } else if lang.placement.stdin_is_source {
         stdin = input.source;
     } else if !lang.is_compiled()
-        && let Some(src) = &lang.overlay.source
+        && let Some(src) = &lang.placement.source
     {
         copy_in.insert(src.clone(), CopyIn::content(input.source));
     }

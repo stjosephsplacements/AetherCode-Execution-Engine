@@ -46,6 +46,12 @@ struct RunRequest<'a> {
 impl GoJudge {
     /// Builds a client for `AC_JUDGE_URL` authenticated with `AC_JUDGE_TOKEN`.
     pub fn new(cfg: &Config) -> Result<Self, Error> {
+        if !cfg.judge_url.starts_with("http://") {
+            return Err(Error::Config(format!(
+                "AC_JUDGE_URL must be an http:// URL (TLS is not supported), got {:?}",
+                cfg.judge_url
+            )));
+        }
         // No overall timeout: batched /run calls vary in duration; callers bound them.
         let http = Client::builder()
             .pool_max_idle_per_host(128)

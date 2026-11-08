@@ -496,7 +496,7 @@ fn parallelism_hints_by_language() {
 }
 
 #[test]
-fn stdout_truncated_at_ac_sandbox_stdout_max_bytes() {
+fn collector_max_comes_from_sandbox_output_config() {
     let m: HashMap<String, String> = [
         ("AC_SANDBOX_STDOUT_MAX_BYTES", "1234"),
         ("AC_SANDBOX_STDERR_MAX_BYTES", "99"),
@@ -548,7 +548,7 @@ fn custom_table_overrides_builtin() {
 [languages.py]
 compiler = ["/usr/bin/python3", "--version"]
 parallelism = 2
-overlay = { source = "/w/main.py" }
+placement = { source = "/w/main.py" }
 hello = 'print("hello")'
 [languages.py.execute_cmd]
 args = ["/usr/bin/python3", "/w/main.py"]

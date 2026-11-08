@@ -12,11 +12,11 @@ pub use language::{
     CmdTemplate, Language, Languages, Limits, MAX_ARG_BYTES, MAX_ARGS, MAX_ARGS_TOTAL_LEN,
     MAX_ENV_TOTAL_BYTES, MAX_ENV_VALUE_BYTES, MAX_ENV_VARS, MAX_RUN_CPU, MAX_RUN_MEM,
     MAX_RUN_PROCS, MAX_RUN_STACK, MIN_RUN_CPU, MIN_RUN_MEM, MIN_RUN_PROCS, MIN_RUN_STACK,
-    OutputCaps, Overlay, RunInput, RunLimits, cache_source_cmd, clock_limit, compile_cmd,
+    OutputCaps, Placement, RunInput, RunLimits, cache_source_cmd, clock_limit, compile_cmd,
     merge_env, run_cmd, validate_args, validate_compiler_flags, validate_env, validate_files,
 };
 pub use probe::probe_languages;
-pub use registry::{LanguageStatus, Registry};
+pub use registry::{LanguageStatus, REFRESH_INTERVAL, Registry, STARTUP_BUDGET};
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -46,6 +46,8 @@ pub enum Error {
     InvalidFileId(String),
     #[error("sandbox: {0}")]
     Config(String),
+    #[error("sandbox: go-judge did not answer within the startup budget")]
+    SandboxUnreachable,
 }
 
 /// A go-judge file-cache id.
@@ -79,6 +81,10 @@ fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
+fn is_none_or_zero(v: &Option<u64>) -> bool {
+    v.is_none_or(|v| v == 0)
+}
+
 /// An entry of `Cmd.files`: stdin content, or a named output collector with a size cap.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CmdFile {
@@ -86,7 +92,8 @@ pub struct CmdFile {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `None` and `Some(0)` are both omitted, like Go's `omitempty`.
+    #[serde(default, skip_serializing_if = "is_none_or_zero")]
     pub max: Option<u64>,
 }
 

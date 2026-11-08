@@ -58,7 +58,7 @@ pub async fn probe_languages(
 }
 
 /// First line of the compiler's version output (stdout, else stderr).
-pub(crate) async fn toolchain_version(sb: &dyn Sandbox, lang: &Language) -> Option<String> {
+pub(crate) async fn toolchain_version(sb: &dyn Sandbox, lang: &Language) -> Result<String, String> {
     let cmd = Cmd {
         args: lang.compiler.clone(),
         env: lang.tool_env().to_vec(),
@@ -74,9 +74,15 @@ pub(crate) async fn toolchain_version(sb: &dyn Sandbox, lang: &Language) -> Opti
         copy_out: vec!["stdout".into(), "stderr".into()],
         ..Cmd::default()
     };
-    let r = sb.run(vec![cmd]).await.ok()?.into_iter().next()?;
+    let r = sb
+        .run(vec![cmd])
+        .await
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .next()
+        .ok_or_else(|| "no result".to_owned())?;
     if r.status != STATUS_ACCEPTED {
-        return None;
+        return Err(format!("{} {}", r.status, r.error));
     }
     ["stdout", "stderr"]
         .iter()
@@ -85,4 +91,5 @@ pub(crate) async fn toolchain_version(sb: &dyn Sandbox, lang: &Language) -> Opti
         .map(str::trim)
         .find(|l| !l.is_empty())
         .map(str::to_owned)
+        .ok_or_else(|| "empty version output".to_owned())
 }

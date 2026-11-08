@@ -10,14 +10,14 @@
 #   compile_cmd.defaults  flags appended unless a caller flag has the same name
 #   allowed_flags caller compiler flags accepted for the language
 #   parallelism   concurrent tests per job; absent means unbounded
-#   overlay       where the source and binary live inside the sandbox; stdin_is_source
+#   placement     where the source and binary live inside the sandbox; stdin_is_source
 #                 delivers the source on stdin instead of as a file
 #   hello         self-test program; it must print "hello"
 
 [languages.c]
 compiler = ["/usr/bin/gcc", "--version"]
 allowed_flags = ["-O0", "-O1", "-O2", "-O3", "-Os", "-std=c99", "-std=c11", "-std=c17", "-lm", "-Wall", "-Wextra", "-pedantic"]
-overlay = { source = "/w/main.c", binary = "/w/a.out" }
+placement = { source = "/w/main.c", binary = "/w/a.out" }
 hello = '''
 #include <stdio.h>
 int main(void) { puts("hello"); return 0; }
@@ -34,7 +34,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
 [languages.cpp]
 compiler = ["/usr/bin/g++", "--version"]
 allowed_flags = ["-O0", "-O1", "-O2", "-O3", "-Os", "-std=c++11", "-std=c++14", "-std=c++17", "-std=c++20", "-std=c++23", "-lm", "-Wall", "-Wextra", "-pedantic"]
-overlay = { source = "/w/main.cpp", binary = "/w/a.out" }
+placement = { source = "/w/main.cpp", binary = "/w/a.out" }
 hello = '''
 #include <iostream>
 int main() { std::cout << "hello\n"; return 0; }
@@ -50,7 +50,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
 
 [languages.go]
 compiler = ["/usr/bin/go", "version"]
-overlay = { source = "/w/main.go", binary = "/w/main" }
+placement = { source = "/w/main.go", binary = "/w/main" }
 hello = '''
 package main
 
@@ -70,7 +70,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 20 }
 [languages.java]
 compiler = ["/usr/bin/javac", "--version"]
 parallelism = 4
-overlay = { source = "/w/Main.java", binary = "/w/Main.class" }
+placement = { source = "/w/Main.java", binary = "/w/Main.class" }
 hello = '''
 public class Main { public static void main(String[] a) { System.out.println("hello"); } }
 '''
@@ -86,7 +86,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50, min_memory = 2
 [languages.python]
 compiler = ["/usr/bin/python3", "--version"]
 parallelism = 8
-overlay = { source = "/w/main.py" }
+placement = { source = "/w/main.py" }
 hello = '''
 print("hello")
 '''
@@ -98,7 +98,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
 [languages.javascript]
 compiler = ["/usr/bin/node", "--version"]
 parallelism = 8
-overlay = { source = "/w/main.js" }
+placement = { source = "/w/main.js" }
 hello = '''
 console.log("hello");
 '''
@@ -110,7 +110,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
 [languages.sqlite]
 compiler = ["/usr/bin/sqlite3", "--version"]
 parallelism = 8
-overlay = { stdin_is_source = true }
+placement = { stdin_is_source = true }
 hello = '''
 SELECT 'hello';
 '''
@@ -122,7 +122,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
 [languages.bash]
 compiler = ["/bin/bash", "--version"]
 parallelism = 8
-overlay = { source = "/w/main.sh" }
+placement = { source = "/w/main.sh" }
 hello = '''
 echo hello
 '''
@@ -134,7 +134,7 @@ limits = { cpu = 2_000_000_000, memory = 268_435_456, procs = 20 }
 [languages.csharp]
 compiler = ["/usr/bin/mcs", "--version"]
 parallelism = 4
-overlay = { source = "/w/Main.cs", binary = "/w/main.exe" }
+placement = { source = "/w/Main.cs", binary = "/w/main.exe" }
 hello = '''
 public class Program { public static void Main() { System.Console.WriteLine("hello"); } }
 '''
@@ -150,7 +150,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 20, min_memory = 1
 [languages.kotlin]
 compiler = ["/usr/bin/kotlinc", "-version"]
 parallelism = 4
-overlay = { source = "/w/Main.kt", binary = "/w/Main.jar" }
+placement = { source = "/w/Main.kt", binary = "/w/Main.jar" }
 hello = '''
 fun main() { println("hello") }
 '''
@@ -166,7 +166,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50, min_memory = 2
 [languages.rust]
 compiler = ["/usr/bin/rustc", "--version"]
 allowed_flags = ["-O", "--edition=2018", "--edition=2021"]
-overlay = { source = "/w/main.rs", binary = "/w/a.out" }
+placement = { source = "/w/main.rs", binary = "/w/a.out" }
 # try_into is only in the edition 2021 prelude, so the self-test also proves the edition.
 hello = '''
 fn main() { let _x: u8 = 1u32.try_into().unwrap(); println!("hello"); }
@@ -186,7 +186,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 10 }
 [languages.typescript]
 compiler = ["/usr/bin/bun", "--version"]
 parallelism = 8
-overlay = { source = "/w/main.ts" }
+placement = { source = "/w/main.ts" }
 hello = '''
 const s: string = "hello";
 console.log(s);
@@ -199,7 +199,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
 [languages.php]
 compiler = ["/usr/bin/php", "--version"]
 parallelism = 8
-overlay = { source = "/w/main.php" }
+placement = { source = "/w/main.php" }
 hello = '''
 <?php echo "hello\n";
 '''
@@ -211,7 +211,7 @@ limits = { cpu = 2_000_000_000, memory = 536_870_912, procs = 50 }
 [languages.ruby]
 compiler = ["/usr/bin/ruby", "--version"]
 parallelism = 8
-overlay = { source = "/w/main.rb" }
+placement = { source = "/w/main.rb" }
 hello = '''
 puts "hello"
 '''
