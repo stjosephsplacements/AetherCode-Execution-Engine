@@ -11,6 +11,7 @@ use ipnet::IpNet;
 use redis::aio::ConnectionManager;
 use std::convert::Infallible;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tower::{Layer, Service};
@@ -35,6 +36,9 @@ redis.call('ZADD', key, now, member)
 redis.call('EXPIRE', key, math.ceil(window/1000) + 1)
 return {1, 0}
 ";
+
+/// Set once the missing-`ConnectInfo` misconfiguration has been logged.
+static MISSING_PEER_LOGGED: AtomicBool = AtomicBool::new(false);
 
 const WINDOW_MS: i64 = 60_000;
 const BURST_WINDOW: Duration = Duration::from_secs(10);
@@ -149,6 +153,11 @@ impl Limiter {
 
 /// Per-user limit for requests carrying an [`Identity`]; per-client-IP limit (when
 /// configured) for the rest. The IP honours `X-Forwarded-For` only from trusted proxies.
+///
+/// The server must be started with
+/// `into_make_service_with_connect_info::<SocketAddr>()`. Without the peer address the IP
+/// limiter cannot key callers, so such requests fail with 500 and the misconfiguration is
+/// logged (once) instead of throttling every anonymous caller through one shared bucket.
 #[derive(Clone)]
 pub struct RateLimitLayer {
     user: Limiter,
@@ -227,7 +236,18 @@ where
             let decision = if let Some(id) = req.extensions().get::<Identity>() {
                 cfg.user.check(id.user_id).await
             } else if let Some(ip) = &cfg.ip {
-                let client = remote_ip(peer_ip(&req), req.headers(), &cfg.trusted);
+                let Some(peer) = peer_ip(&req) else {
+                    if !MISSING_PEER_LOGGED.swap(true, Ordering::Relaxed) {
+                        tracing::error!(
+                            "ratelimit: request has no peer address; serve with into_make_service_with_connect_info::<SocketAddr>()"
+                        );
+                    }
+                    return Ok(json_error(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal error",
+                    ));
+                };
+                let client = remote_ip(Some(peer), req.headers(), &cfg.trusted);
                 ip.check_ip(&client).await
             } else {
                 ALLOW

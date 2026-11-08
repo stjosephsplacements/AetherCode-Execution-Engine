@@ -561,6 +561,22 @@ async fn auth_disabled_requires_allow_unauth() {
 }
 
 #[tokio::test]
+async fn auth_enabled_requires_issuer_and_jwks_url() {
+    let base = cfg(&[("AC_AUTH_ENABLED", "true"), ("AC_OIDC_AUDIENCE", AUDIENCE)]);
+    let mut no_issuer = base.clone();
+    no_issuer.oidc_issuer.clear();
+    let mut no_jwks = base;
+    no_jwks.oidc_jwks_url.clear();
+    for (c, label) in [(no_issuer, "AC_OIDC_ISSUER"), (no_jwks, "AC_OIDC_JWKS_URL")] {
+        let err = AuthLayer::from_config(&c, Arc::new(FakeStore::default()))
+            .await
+            .err()
+            .expect("must fail");
+        assert!(err.to_string().contains(label), "{err}");
+    }
+}
+
+#[tokio::test]
 async fn auth_enabled_requires_audience() {
     let c = cfg(&[("AC_AUTH_ENABLED", "true")]);
     assert!(

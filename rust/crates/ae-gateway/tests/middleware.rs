@@ -53,6 +53,22 @@ fn remote_ip_untrusted_peer_ignores_xff() {
 }
 
 #[test]
+fn remote_ip_rejects_unparseable_forwarded_values() {
+    let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_owned()]);
+    assert_eq!(
+        remote_ip(ip("10.0.0.2"), &xff("not-an-ip"), &trusted),
+        "10.0.0.2"
+    );
+    assert_eq!(
+        remote_ip(ip("10.0.0.2"), &xff("8.8.8.8, a:b:c:zz"), &trusted),
+        "10.0.0.2"
+    );
+    let mut h = HeaderMap::new();
+    h.insert("x-real-ip", HeaderValue::from_static("x; DEL 1.2.3.4"));
+    assert_eq!(remote_ip(ip("10.0.0.2"), &h, &trusted), "10.0.0.2");
+}
+
+#[test]
 fn remote_ip_rightmost_untrusted_wins_and_x_real_ip_fallback() {
     let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_owned()]);
     // A client-supplied left-most entry cannot override the proxy-appended one.

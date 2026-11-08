@@ -334,6 +334,10 @@ impl Jwks {
     }
 
     /// Key for `kid`, refetching the set once per `refetch_min_interval` when unknown.
+    ///
+    /// The limit bounds the JWKS fetches forged kids can cause. Trade-off (same as
+    /// keyfunc): a forged kid that consumes the refetch can delay pickup of a genuinely
+    /// rotated key by up to `refetch_min_interval`; the periodic refresh still applies.
     async fn key(&self, kid: &str) -> Option<Arc<SigningKey>> {
         if let Some(k) = self.get(kid) {
             return Some(k);
@@ -596,6 +600,16 @@ impl AuthLayer {
             }
             tracing::warn!("AC_AUTH_ENABLED=false: authentication is disabled");
             return Ok(Self { auth: None });
+        }
+        if cfg.oidc_issuer.is_empty() {
+            return Err(AuthError::Config(
+                "OIDCIssuer (AC_OIDC_ISSUER) is required when auth is enabled".to_owned(),
+            ));
+        }
+        if cfg.oidc_jwks_url.is_empty() {
+            return Err(AuthError::Config(
+                "OIDCJWKSURL (AC_OIDC_JWKS_URL) is required when auth is enabled".to_owned(),
+            ));
         }
         if cfg.oidc_audience.is_empty() {
             return Err(AuthError::Config(

@@ -235,3 +235,74 @@ async fn xff_from_untrusted_peer_is_ignored() {
         StatusCode::TOO_MANY_REQUESTS
     );
 }
+
+#[derive(Clone, Default)]
+struct Capture(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Capture {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn missing_connect_info_fails_closed_and_logs_once() {
+    let cap = Capture::default();
+    let w = cap.clone();
+    let sub = tracing_subscriber::fmt()
+        .with_writer(move || w.clone())
+        .with_ansi(false)
+        .finish();
+    let _g = tracing::subscriber::set_default(sub);
+
+    let (_c, addr) = redis().await;
+    let conn = redis_conn(&addr).await;
+    let app = app(RateLimitLayer::new(
+        Limiter::new(conn.clone(), 100, 100),
+        Some(Limiter::new(conn, 100, 100)),
+        vec![],
+    ));
+    for _ in 0..3 {
+        let resp = app
+            .clone()
+            .oneshot(req("GET", "/").body(empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(body_string(resp).await, "{\"error\":\"internal error\"}\n");
+    }
+    let logs = String::from_utf8(cap.0.lock().unwrap().clone()).unwrap();
+    assert_eq!(
+        logs.matches("into_make_service_with_connect_info").count(),
+        1,
+        "{logs}"
+    );
+    // With ConnectInfo the same layer limits normally.
+    assert_eq!(hit(&app, "1.2.3.4:1", None, None).await.0, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn unparseable_forwarded_ip_uses_peer_key() {
+    let (_c, addr) = redis().await;
+    let conn = redis_conn(&addr).await;
+    let app = app(RateLimitLayer::new(
+        Limiter::new(conn.clone(), 100, 100),
+        Some(Limiter::new(conn.clone(), 100, 100)),
+        parse_trusted_proxies(&["10.0.0.0/8".to_owned()]),
+    ));
+    assert_eq!(
+        hit(&app, "10.0.0.5:1", Some("not-an-ip"), None).await.0,
+        StatusCode::OK
+    );
+    let mut c = conn;
+    let keys: Vec<String> = redis::cmd("KEYS")
+        .arg("ac:ratelimit:ip:*")
+        .query_async(&mut c)
+        .await
+        .unwrap();
+    assert_eq!(keys, ["ac:ratelimit:ip:10.0.0.5"]);
+}

@@ -38,6 +38,8 @@ fn is_trusted(ip: IpAddr, nets: &[IpNet]) -> bool {
 /// Client IP for rate limiting. `X-Forwarded-For` (right-most entry that is not itself a
 /// trusted proxy) and then `X-Real-Ip` are honoured only when the direct peer is a trusted
 /// proxy; otherwise the peer address is used, so untrusted callers cannot pick their key.
+/// Forwarded values must parse as IP addresses (an unparseable one falls back to the peer),
+/// so arbitrary strings never become rate-limit key suffixes.
 #[must_use]
 pub fn remote_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpNet]) -> String {
     let peer = peer.map(|p| p.to_canonical());
@@ -47,17 +49,23 @@ pub fn remote_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpNet]) -
     {
         if let Some(xff) = header_str(headers, "x-forwarded-for") {
             for part in xff.split(',').rev() {
-                let ip = part.trim();
-                if ip.is_empty() {
+                let part = part.trim();
+                if part.is_empty() {
                     continue;
                 }
-                if !ip.parse::<IpAddr>().is_ok_and(|a| is_trusted(a, trusted)) {
-                    return ip.to_owned();
+                let Ok(ip) = part.parse::<IpAddr>() else {
+                    return p.to_string();
+                };
+                if !is_trusted(ip, trusted) {
+                    return ip.to_canonical().to_string();
                 }
             }
         }
         if let Some(xri) = header_str(headers, "x-real-ip") {
-            return xri.trim().to_owned();
+            return xri
+                .trim()
+                .parse::<IpAddr>()
+                .map_or_else(|_| p.to_string(), |ip| ip.to_canonical().to_string());
         }
     }
     peer.map_or_else(|| "unknown".to_owned(), |p| p.to_string())
