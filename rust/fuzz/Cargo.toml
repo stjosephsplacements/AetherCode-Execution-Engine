@@ -1,0 +1,28 @@
+[package]
+name = "ae-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+ae-core = { path = "../crates/ae-core" }
+
+[workspace]
+
+[[bin]]
+name = "normalize_output"
+path = "fuzz_targets/normalize_output.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "judge_output"
+path = "fuzz_targets/judge_output.rs"
+test = false
+doc = false
+bench = false

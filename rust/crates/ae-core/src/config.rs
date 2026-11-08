@@ -4,7 +4,7 @@ use std::time::Duration;
 
 /// Engine configuration, one field per `AC_*` variable. Defaults match the Go engine
 /// except where noted on the field.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct Config {
     pub gateway_addr: String,
     pub database_url: String,
@@ -238,6 +238,24 @@ fn parse_duration(s: &str) -> Option<Duration> {
     Duration::try_from_secs_f64(total).ok()
 }
 
+impl std::fmt::Debug for Config {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let r = "<redacted>";
+        f.debug_struct("Config")
+            .field("gateway_addr", &self.gateway_addr)
+            .field("database_url", &r)
+            .field("redis_addr", &self.redis_addr)
+            .field("redis_password", &r)
+            .field("judge_url", &self.judge_url)
+            .field("judge_token", &r)
+            .field(
+                "webhook_master_key",
+                &self.webhook_master_key.as_ref().map(|_| r),
+            )
+            .finish_non_exhaustive()
+    }
+}
+
 fn hex_key(
     m: &HashMap<String, String>,
     key: &'static str,
@@ -247,7 +265,7 @@ fn hex_key(
         return Ok(None);
     };
     let bad = || invalid(key, "<redacted>", "hex string of 64 characters");
-    if v.len() != want * 2 || !v.is_ascii() {
+    if v.len() != want * 2 || !v.bytes().all(|b| b.is_ascii_hexdigit()) {
         return Err(bad());
     }
     (0..v.len())
@@ -370,5 +388,30 @@ mod tests {
     fn redis_password_read() {
         let c = Config::from_map(&map(&[("AC_REDIS_PASSWORD", "s3cret")])).unwrap();
         assert_eq!(c.redis_password, "s3cret");
+    }
+
+    #[test]
+    fn hex_key_rejects_non_hex_characters() {
+        let k = format!("+{}", "a".repeat(63));
+        let err = Config::from_map(&map(&[("AC_WEBHOOK_MASTER_KEY", &k)]));
+        assert!(err.is_err());
+        let k = "a".repeat(64);
+        assert!(Config::from_map(&map(&[("AC_WEBHOOK_MASTER_KEY", &k)])).is_ok());
+    }
+
+    #[test]
+    fn debug_redacts_secrets() {
+        let key = "ab".repeat(32);
+        let c = Config::from_map(&map(&[
+            ("AC_REDIS_PASSWORD", "hunter2"),
+            ("AC_JUDGE_TOKEN", "tok-secret"),
+            ("AC_DATABASE_URL", "postgres://u:dbpass@h/db"),
+            ("AC_WEBHOOK_MASTER_KEY", &key),
+        ]))
+        .unwrap();
+        let d = format!("{c:?}");
+        for secret in ["hunter2", "tok-secret", "dbpass", "abab"] {
+            assert!(!d.contains(secret), "{secret} leaked: {d}");
+        }
     }
 }
