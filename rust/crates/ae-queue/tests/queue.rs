@@ -553,3 +553,64 @@ async fn empty_stream_names_are_skipped() {
         .unwrap();
     assert!(!exists, "a stream named \"\" was created");
 }
+
+#[tokio::test]
+async fn limited_reads_keep_weighted_round_robin() {
+    let mut e = env().await;
+    let mut pipe = redis::pipe();
+    for i in 0..20 {
+        for s in [SUBMIT, RUN, BULK] {
+            pipe.cmd("XADD")
+                .arg(s)
+                .arg("*")
+                .arg("submission_id")
+                .arg(format!("{s}-{i}"))
+                .ignore();
+        }
+    }
+    pipe.query_async::<()>(&mut e.rdb).await.unwrap();
+    let mut tiers = Vec::new();
+    for _ in 0..15 {
+        let d = e.q.read_up_to(1).await.unwrap();
+        assert_eq!(d.len(), 1);
+        tiers.push(d[0].stream.clone());
+    }
+    let cycle = [SUBMIT, SUBMIT, SUBMIT, RUN, BULK];
+    let want: Vec<&str> = cycle.iter().cycle().take(15).copied().collect();
+    assert_eq!(tiers, want);
+}
+
+#[tokio::test]
+async fn idle_consumer_leaves_slots_for_the_reclaimer() {
+    let mut e = env().await;
+    go_enqueue(&mut e.rdb, SUBMIT, "stuck").await;
+    let _: redis::Value = redis::cmd("XREADGROUP")
+        .arg("GROUP")
+        .arg("workers")
+        .arg("crashed")
+        .arg("COUNT")
+        .arg(1)
+        .arg("STREAMS")
+        .arg(SUBMIT)
+        .arg(">")
+        .query_async(&mut e.rdb)
+        .await
+        .unwrap();
+    // Capacity equals one weighted batch (3 + 1 + 1).
+    let (tx, mut rx) = mpsc::channel(5);
+    let q = e.q.clone();
+    let h = tokio::spawn({
+        let tx = tx.clone();
+        async move { q.consume(tx).await }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await; // consumer is now in block_read
+    e.q.reclaim_once(&tx, Duration::ZERO).await.unwrap();
+    let d = timeout(Duration::from_secs(1), rx.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(d.job_id, "stuck");
+    drop(rx);
+    drop(tx);
+    h.await.unwrap();
+}

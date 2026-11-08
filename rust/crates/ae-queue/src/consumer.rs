@@ -4,6 +4,7 @@ use ae_core::model::Verdict;
 use redis::aio::MultiplexedConnection;
 use redis::streams::{StreamId, StreamReadReply};
 use serde_json::json;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
@@ -133,34 +134,56 @@ impl Queue {
     /// # Errors
     /// Fails on a Redis error.
     pub async fn read_batch(&self) -> Result<Vec<Delivery>> {
-        self.read_limited(self.batch_size()).await
+        self.read_up_to(self.batch_size()).await
     }
 
     /// Messages one weighted cycle reads at most.
     pub(crate) fn batch_size(&self) -> usize {
-        self.tier_counts(usize::MAX).iter().map(|(_, n)| n).sum()
+        self.schedule().len()
     }
 
-    /// Per-stream `COUNT`s of one cycle, in weight order, capped at `limit` in total.
-    fn tier_counts(&self, limit: usize) -> Vec<(&str, usize)> {
-        let mut left = limit;
+    /// One weighted cycle as slots: `submit_weight` submit slots, one run slot,
+    /// `bulk_weight` bulk slots (Go's `DualConsumer` cycle), skipping unset streams.
+    fn schedule(&self) -> Vec<&str> {
         let mut out = Vec::new();
         for (s, w) in [
             (&self.submit, self.submit_weight),
             (&self.run, 1),
             (&self.bulk, self.bulk_weight),
         ] {
-            let n = w.min(left);
-            if !s.is_empty() && n > 0 {
-                out.push((s.as_str(), n));
-                left -= n;
+            if !s.is_empty() {
+                out.extend(std::iter::repeat_n(s.as_str(), w));
+            }
+        }
+        out
+    }
+
+    /// Per-stream `COUNT`s for the next `limit` slots of the weighted cycle, starting where
+    /// the previous read stopped (weighted round robin), so long-run proportions equal the
+    /// weights even when backpressure allows one message per read.
+    fn tier_counts(&self, limit: usize) -> Vec<(&str, usize)> {
+        let sched = self.schedule();
+        if sched.is_empty() || limit == 0 {
+            return Vec::new();
+        }
+        let n = limit.min(sched.len());
+        let start = self.cursor.fetch_add(n, Ordering::Relaxed) % sched.len();
+        let mut out: Vec<(&str, usize)> = Vec::new();
+        for i in 0..n {
+            let s = sched[(start + i) % sched.len()];
+            match out.last_mut() {
+                Some((last, c)) if *last == s => *c += 1,
+                _ => out.push((s, 1)),
             }
         }
         out
     }
 
     /// [`read_batch`](Queue::read_batch) reading at most `limit` messages.
-    async fn read_limited(&self, limit: usize) -> Result<Vec<Delivery>> {
+    ///
+    /// # Errors
+    /// Fails on a Redis error.
+    pub async fn read_up_to(&self, limit: usize) -> Result<Vec<Delivery>> {
         let tiers = self.tier_counts(limit);
         if tiers.is_empty() {
             return Ok(Vec::new());
@@ -245,9 +268,13 @@ impl Queue {
             let Some(mut permits) = reserve(&tx, self.batch_size()).await else {
                 return;
             };
-            let batch = match self.read_limited(permits.len()).await {
+            let batch = match self.read_up_to(permits.len()).await {
                 Ok(b) if !b.is_empty() => Ok(b),
-                Ok(_) => self.block_read(&mut bconn).await,
+                Ok(_) => {
+                    // COUNT 1: hold one slot while blocking, free the rest for the reclaimer.
+                    permits.truncate(1);
+                    self.block_read(&mut bconn).await
+                }
                 Err(e) => Err(e),
             };
             match batch {

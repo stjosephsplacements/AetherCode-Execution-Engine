@@ -52,29 +52,28 @@ impl Queue {
         min_idle: Duration,
     ) -> Result<()> {
         for s in self.streams() {
-            if !self.reclaim_stream(s, tx, min_idle).await? {
-                return Ok(());
-            }
+            // A stream that found no free slot does not stop the pass: later streams still
+            // get any slot freed meanwhile, so bulk reclaim is not starved.
+            self.reclaim_stream(s, tx, min_idle).await?;
         }
         Ok(())
     }
 
-    /// False when `tx` has no free slot (or is closed): claiming without a slot would only
-    /// park the message under `reclaimer` and bump its delivery count, so the pass stops and
-    /// the next cycle retries.
+    /// Returns when `tx` has no free slot (or is closed): claiming without a slot would only
+    /// park the message under `reclaimer` and bump its delivery count; the next cycle retries.
     async fn reclaim_stream(
         &self,
         stream: &str,
         tx: &mpsc::Sender<Delivery>,
         min_idle: Duration,
-    ) -> Result<bool> {
+    ) -> Result<()> {
         let mut conn = self.conn.clone();
         let mut cursor = "0-0".to_owned();
         loop {
             let mut permits = Vec::new();
             try_reserve_more(tx, CLAIM_BATCH, &mut permits);
             if permits.is_empty() {
-                return Ok(false);
+                return Ok(());
             }
             let claim: StreamAutoClaimReply = redis::cmd("XAUTOCLAIM")
                 .arg(stream)
@@ -109,7 +108,7 @@ impl Queue {
                 }
             }
             if claim.next_stream_id == "0-0" {
-                return Ok(true);
+                return Ok(());
             }
             cursor = claim.next_stream_id;
         }

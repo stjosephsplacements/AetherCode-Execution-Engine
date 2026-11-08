@@ -81,6 +81,8 @@ pub struct Queue {
     master_key: Option<Arc<[u8]>>,
     store: Arc<dyn ExpiryStore>,
     poisoned: Arc<AtomicU64>,
+    /// Weighted-round-robin position, shared by clones (see `tier_counts`).
+    cursor: Arc<std::sync::atomic::AtomicUsize>,
     hub: Arc<tokio::sync::Mutex<Option<events::HubHandle>>>,
 }
 
@@ -131,6 +133,7 @@ impl Queue {
             master_key: cfg.webhook_master_key.as_deref().map(Arc::from),
             store,
             poisoned: Arc::new(AtomicU64::new(0)),
+            cursor: Arc::default(),
             hub: Arc::new(tokio::sync::Mutex::new(None)),
         };
         for s in q.streams() {
