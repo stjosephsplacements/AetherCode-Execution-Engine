@@ -3,6 +3,7 @@ pub mod error;
 pub mod eventlog;
 pub mod judge;
 pub mod model;
+pub mod observe;
 pub mod requestid;
 
 pub use config::Config;

@@ -9,6 +9,7 @@ use crate::{AbortOnDrop, Bus, Error, Result, Store};
 use ae_core::Config;
 use ae_core::eventlog::{Event, EventType};
 use ae_core::model::{Status, Verdict};
+use ae_core::observe::Observer;
 use ae_db::truncate;
 use ae_queue::Delivery;
 use ae_sandbox::{Language, Registry, RunLimits, Sandbox};
@@ -42,6 +43,9 @@ pub struct WorkerOptions {
     pub cache_ttl: Duration,
     pub cache_max_bytes: u64,
     pub webhook: WebhookClient,
+    /// Job progress hook (metrics and the gateway's drain rate). The engine passes
+    /// `ae_gateway::AppState::worker_observer()`; the default records nothing.
+    pub observer: Observer,
 }
 
 impl WorkerOptions {
@@ -54,6 +58,7 @@ impl WorkerOptions {
             cache_ttl: cfg.compile_cache_ttl,
             cache_max_bytes: cfg.compile_cache_max_mb.saturating_mul(1 << 20),
             webhook: WebhookClient::new(),
+            observer: Observer::default(),
         }
     }
 }
@@ -198,33 +203,52 @@ impl Worker {
 
     async fn handle(&self, id: &str) -> Result<()> {
         let inner = &*self.inner;
+        let obs = &inner.opts.observer;
+        let started = Instant::now();
         // Test data (Redis) and the claim (Postgres) are independent; overlap them.
         let (spec, claim) = tokio::join!(inner.bus.get_tests(id), self.claim(id));
         let Some(sub) = claim? else {
             return Ok(());
         };
+        obs.stage("claim", started.elapsed());
+        let _active = Active::new(obs);
+        let lang_id = sub.language.as_str();
         let _heartbeat = self.heartbeat(id);
 
         let spec = match spec {
             Ok(s) => s,
             Err(e) => {
                 return self
-                    .fail(id, Verdict::InternalError, &format!("load tests: {e}"))
+                    .fail(
+                        id,
+                        lang_id,
+                        started,
+                        Verdict::InternalError,
+                        &format!("load tests: {e}"),
+                    )
                     .await;
             }
         };
         if spec.set.tests.is_empty() {
             return self
-                .fail(id, Verdict::InternalError, "no tests found")
+                .fail(
+                    id,
+                    lang_id,
+                    started,
+                    Verdict::InternalError,
+                    "no tests found",
+                )
                 .await;
         }
         let Some(lang) = inner.registry.get(&sub.language).cloned() else {
             return if inner.registry.languages().get(&sub.language).is_some() {
                 let msg = format!("language unavailable: {}", sub.language);
-                self.fail(id, Verdict::CompilationError, &msg).await
+                self.fail(id, lang_id, started, Verdict::CompilationError, &msg)
+                    .await
             } else {
                 let msg = format!("unknown language: {}", sub.language);
-                self.fail(id, Verdict::InternalError, &msg).await
+                self.fail(id, lang_id, started, Verdict::InternalError, &msg)
+                    .await
             };
         };
         let set = &spec.set;
@@ -268,19 +292,27 @@ impl Worker {
                 &set.files,
                 &set.compiler_flags,
             );
+            let compile_start = Instant::now();
             let compiled =
                 tokio::time::timeout_at(deadline, inner.cache.get_or_compile(key, build))
                     .await
                     .unwrap_or_else(|_| Err(Error::Other("compile: job deadline exceeded".into())));
             match compiled {
                 Ok((f, hit)) => {
+                    obs.compiled(lang_id, compile_start.elapsed(), hit);
                     tracing::info!(job_id = id, file_id = %f.id().0, cache_hit = hit, "compiled");
                     binary = Some(f);
                 }
                 Err(Error::Compile(stderr)) => {
-                    return self.fail(id, Verdict::CompilationError, &stderr).await;
+                    return self
+                        .fail(id, lang_id, started, Verdict::CompilationError, &stderr)
+                        .await;
                 }
-                Err(e) => return self.fail(id, Verdict::InternalError, &e.to_string()).await,
+                Err(e) => {
+                    return self
+                        .fail(id, lang_id, started, Verdict::InternalError, &e.to_string())
+                        .await;
+                }
             }
             if !inner.store.set_status(id, Status::Running).await? {
                 tracing::info!(job_id = id, "submission became terminal before test run");
@@ -305,6 +337,7 @@ impl Worker {
             }
         }
 
+        let run_start = Instant::now();
         let outcome = match self
             .prepare_and_run(
                 id,
@@ -320,18 +353,27 @@ impl Worker {
             Ok(o) => o,
             Err(e) => {
                 return self
-                    .fail(id, Verdict::InternalError, &format!("batch run: {e}"))
+                    .fail(
+                        id,
+                        lang_id,
+                        started,
+                        Verdict::InternalError,
+                        &format!("batch run: {e}"),
+                    )
                     .await;
             }
         };
+        obs.stage("run", run_start.elapsed());
         drop(binary);
 
         let results = &outcome.results;
-        if !inner
+        let persist_start = Instant::now();
+        let persisted = inner
             .store
             .finish_with_results(id, outcome.verdict, results)
-            .await?
-        {
+            .await?;
+        obs.stage("persist", persist_start.elapsed());
+        if !persisted {
             tracing::warn!(
                 job_id = id,
                 "duplicate execution detected, verdict already persisted"
@@ -346,6 +388,7 @@ impl Worker {
         let peak = results.iter().map(|r| r.memory_bytes).max().unwrap_or(0);
         let event_results = verdict_results_for(results, &set.output_mode);
         let (applied_cpu, applied_mem) = lang.effective(&limits);
+        let publish_start = Instant::now();
         self.publish(
             id,
             EventType::Verdict,
@@ -361,6 +404,8 @@ impl Worker {
             })),
         )
         .await;
+        obs.stage("publish", publish_start.elapsed());
+        obs.job_finished(lang_id, outcome.verdict, started.elapsed());
 
         if !set.callback_url.is_empty() {
             match inner.store.mark_webhook_delivered(id).await {
@@ -497,7 +542,14 @@ impl Worker {
     }
 
     /// Records a failed job and, when this call recorded it, publishes its VERDICT.
-    async fn fail(&self, id: &str, verdict: Verdict, stderr: &str) -> Result<()> {
+    async fn fail(
+        &self,
+        id: &str,
+        language: &str,
+        started: Instant,
+        verdict: Verdict,
+        stderr: &str,
+    ) -> Result<()> {
         let stderr = truncate(stderr, MAX_STDERR_BYTES);
         if !self
             .inner
@@ -517,8 +569,29 @@ impl Worker {
             Some(json!({ "verdict": verdict, "compile_stderr": stderr })),
         )
         .await;
+        self.inner
+            .opts
+            .observer
+            .job_finished(language, verdict, started.elapsed());
         tracing::info!(job_id = id, ?verdict, "submission failed");
         Ok(())
+    }
+}
+
+/// Marks a claimed job active for its lifetime; the drop reports `job_ended` even
+/// when the job errors or panics (Go: `defer ActiveWorkers.Dec(); defer JobsDrain.Complete()`).
+struct Active<'a>(&'a Observer);
+
+impl<'a> Active<'a> {
+    fn new(obs: &'a Observer) -> Self {
+        obs.job_started();
+        Self(obs)
+    }
+}
+
+impl Drop for Active<'_> {
+    fn drop(&mut self) {
+        self.0.job_ended();
     }
 }
 

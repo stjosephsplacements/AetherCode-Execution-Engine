@@ -163,6 +163,29 @@ impl Queue {
         &self.run
     }
 
+    /// Contest-priority stream (`AC_SUBMIT_STREAM`).
+    #[must_use]
+    pub fn submit_stream(&self) -> &str {
+        &self.submit
+    }
+
+    /// Batch-priority stream (`AC_BULK_STREAM`); empty when not configured.
+    #[must_use]
+    pub fn bulk_stream(&self) -> &str {
+        &self.bulk
+    }
+
+    /// `PING`.
+    ///
+    /// # Errors
+    /// Fails when Redis does not answer.
+    pub async fn ping(&self) -> Result<()> {
+        redis::cmd("PING")
+            .query_async::<()>(&mut self.conn.clone())
+            .await?;
+        Ok(())
+    }
+
     /// Messages dead-lettered by the reclaimer since start.
     #[must_use]
     pub fn poisoned(&self) -> u64 {

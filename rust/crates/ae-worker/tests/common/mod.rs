@@ -443,6 +443,7 @@ impl Harness {
             cache_ttl: Duration::from_secs(300),
             cache_max_bytes: 1 << 30,
             webhook: WebhookClient::allowing_private_addresses(),
+            observer: ae_core::observe::Observer::default(),
         }
     }
 

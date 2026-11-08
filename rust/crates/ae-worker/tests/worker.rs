@@ -604,3 +604,63 @@ async fn a_stalled_compile_times_out_clears_the_flight_and_later_jobs_retry() {
         "stalled call plus one retry"
     );
 }
+
+#[derive(Default)]
+struct Recorder(std::sync::Mutex<Vec<String>>);
+
+impl ae_core::observe::JobObserver for Recorder {
+    fn job_started(&self) {
+        self.0.lock().unwrap().push("started".into());
+    }
+    fn job_ended(&self) {
+        self.0.lock().unwrap().push("ended".into());
+    }
+    fn job_finished(&self, language: &str, verdict: Verdict, _: Duration) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("finished:{language}:{verdict:?}"));
+    }
+    fn compiled(&self, language: &str, _: Duration, hit: bool) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(format!("compiled:{language}:{hit}"));
+    }
+    fn stage(&self, stage: &str, _: Duration) {
+        self.0.lock().unwrap().push(format!("stage:{stage}"));
+    }
+}
+
+#[tokio::test]
+async fn observer_sees_every_job_end_once() {
+    let h = Harness::new().await;
+    let rec = std::sync::Arc::new(Recorder::default());
+    let mut opts = h.options();
+    opts.observer = ae_core::observe::Observer(rec.clone());
+    let w = h.worker_with(opts);
+    h.job(&id(1), "cpp", CPP, &[("1", "1")]);
+    w.process(delivery(&id(1))).await.unwrap();
+    h.job(&id(2), "cpp", CPP, &[]);
+    w.process(delivery(&id(2))).await.unwrap();
+    // Redelivery of a finished job is skipped before the claim: no second end.
+    w.process(delivery(&id(1))).await.unwrap();
+    let got = rec.0.lock().unwrap().clone();
+    assert_eq!(
+        got,
+        [
+            "stage:claim",
+            "started",
+            "compiled:cpp:false",
+            "stage:run",
+            "stage:persist",
+            "stage:publish",
+            "finished:cpp:Accepted",
+            "ended",
+            "stage:claim",
+            "started",
+            "finished:cpp:InternalError",
+            "ended",
+        ]
+    );
+}
