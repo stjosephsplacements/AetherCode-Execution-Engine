@@ -359,17 +359,21 @@ async fn finish_with_results_twice_creates_no_duplicates() {
     let s = sub();
     e.db.insert_submission(&s).await.unwrap();
     let rs = [result(0, Verdict::Accepted), result(1, Verdict::Accepted)];
-    e.db.finish_with_results(&s.id, Verdict::Accepted, &rs)
+    let first =
+        e.db.finish_with_results(&s.id, Verdict::Accepted, &rs)
+            .await
+            .unwrap();
+    assert!(first);
+    // Redelivery, even with a different verdict, must change nothing.
+    let second =
+        e.db.finish_with_results(
+            &s.id,
+            Verdict::RuntimeError,
+            &[result(0, Verdict::RuntimeError)],
+        )
         .await
         .unwrap();
-    // Redelivery, even with a different verdict, must change nothing.
-    e.db.finish_with_results(
-        &s.id,
-        Verdict::RuntimeError,
-        &[result(0, Verdict::RuntimeError)],
-    )
-    .await
-    .unwrap();
+    assert!(!second);
     let stored = e.db.get_test_results(&s.id).await.unwrap();
     assert_eq!(stored.len(), 2);
     assert_eq!(stored[0].verdict, Verdict::Accepted);

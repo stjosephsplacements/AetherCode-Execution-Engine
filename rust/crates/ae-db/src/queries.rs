@@ -228,7 +228,10 @@ impl Db {
         .await?
         .rows_affected()
             > 0;
-        if finished && !results.is_empty() {
+        if !finished {
+            return Ok(false);
+        }
+        if !results.is_empty() {
             let verdicts = results
                 .iter()
                 .map(|r| wire(r.verdict))
