@@ -16,6 +16,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 futures-util = "0.3"
 http = "1"
 ipnet = "2"
+opentelemetry = "0.33"
 jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 prometheus = { version = "0.14", default-features = false }
 rand = "0.8"
@@ -28,12 +29,15 @@ thiserror.workspace = true
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 tower = "0.5"
 tracing = "0.1"
+tracing-opentelemetry = { version = "0.34", default-features = false }
 uuid = { version = "1", features = ["v7"] }
 
 [lints]
 workspace = true
 
 [dev-dependencies]
+opentelemetry_sdk = "0.33"
+tracing-opentelemetry = { version = "0.34", default-features = false }
 ae-worker = { path = "../ae-worker" }
 async-trait = "0.1"
 serde_yaml = "0.9"

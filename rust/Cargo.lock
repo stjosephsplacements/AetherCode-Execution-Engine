@@ -80,6 +80,8 @@ dependencies = [
  "http-body-util",
  "ipnet",
  "jsonwebtoken",
+ "opentelemetry",
+ "opentelemetry_sdk",
  "prometheus",
  "rand 0.8.8",
  "redis",
@@ -96,6 +98,7 @@ dependencies = [
  "tokio-util",
  "tower",
  "tracing",
+ "tracing-opentelemetry",
  "tracing-subscriber",
  "uuid",
 ]

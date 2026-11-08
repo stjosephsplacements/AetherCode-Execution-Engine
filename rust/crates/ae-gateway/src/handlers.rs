@@ -249,6 +249,41 @@ mod traceparent_tests {
             assert_eq!(tp(bad), "", "{bad}");
         }
     }
+
+    #[test]
+    fn with_otel_the_job_gets_the_gateway_span_in_the_callers_trace() {
+        use opentelemetry::trace::TracerProvider as _;
+        use tracing_subscriber::layer::SubscriberExt;
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder().build();
+        let sub = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("t")));
+        tracing::subscriber::with_default(sub, || {
+            let incoming = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01";
+            let mut h = HeaderMap::new();
+            h.insert("traceparent", HeaderValue::from_static(incoming));
+            let (_span, job) = super::execute_span(&h);
+            let p: Vec<&str> = job.split('-').collect();
+            assert_eq!(p[1], "4bf92f3577b34da6a3ce929d0e0e4736", "{job}");
+            assert_ne!(
+                p[2], "00f067aa0ba902b7",
+                "parent is the gateway span: {job}"
+            );
+
+            let (_span, job) = super::execute_span(&HeaderMap::new());
+            assert_eq!(tp(&job), job, "root span context is valid: {job}");
+        });
+    }
+
+    #[test]
+    fn new_traceparents_are_valid_and_distinct() {
+        let a = super::new_traceparent();
+        let b = super::new_traceparent();
+        assert_ne!(a, b);
+        assert_eq!(tp(&a), a, "well formed");
+    }
 }
 
 fn valid_checker(s: &str) -> bool {
@@ -318,14 +353,70 @@ pub fn traceparent(headers: &HeaderMap) -> String {
     }
 }
 
-/// `POST /api/v1/execute`.
-#[allow(clippy::too_many_lines)]
+/// The `execute` request span and the traceparent its job carries. A well-formed
+/// incoming `traceparent` is the span's parent. With an OpenTelemetry layer the job gets
+/// this span's context, so worker spans are its children; without one the incoming
+/// value is forwarded, or a fresh trace is started when there is none.
+fn execute_span(headers: &HeaderMap) -> (tracing::Span, String) {
+    use opentelemetry::trace::TraceContextExt;
+    use tracing_opentelemetry::OpenTelemetrySpanExt;
+    let incoming = traceparent(headers);
+    let span = tracing::info_span!("execute", traceparent = tracing::field::Empty);
+    if !incoming.is_empty() {
+        let carrier = HashMap::from([("traceparent".to_owned(), incoming.clone())]);
+        let cx = opentelemetry::global::get_text_map_propagator(|p| p.extract(&carrier));
+        if let Err(e) = span.set_parent(cx) {
+            tracing::debug!(error = %e, "execute span: trace parent not set");
+        }
+    }
+    let cx = span.context();
+    let sc = cx.span().span_context().clone();
+    let tp = if sc.is_valid() {
+        format!(
+            "00-{}-{}-{:02x}",
+            sc.trace_id(),
+            sc.span_id(),
+            sc.trace_flags().to_u8()
+        )
+    } else if !incoming.is_empty() {
+        incoming
+    } else {
+        new_traceparent()
+    };
+    span.record("traceparent", tp.as_str());
+    (span, tp)
+}
+
+/// A random sampled W3C traceparent (non-zero ids).
+fn new_traceparent() -> String {
+    let trace: u128 = rand::random::<u128>().max(1);
+    let span: u64 = rand::random::<u64>().max(1);
+    format!("00-{trace:032x}-{span:016x}-01")
+}
+
+/// `POST /api/v1/execute`, inside its own root span (see [`execute_span`]).
 pub async fn execute(
+    st: State<AppState>,
+    identity: Option<Extension<Identity>>,
+    peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
+    headers: HeaderMap,
+    body: Body,
+) -> Response {
+    use tracing::Instrument;
+    let (span, tp) = execute_span(&headers);
+    execute_traced(st, identity, peer, headers, body, tp)
+        .instrument(span)
+        .await
+}
+
+#[allow(clippy::too_many_lines)]
+async fn execute_traced(
     State(st): State<AppState>,
     identity: Option<Extension<Identity>>,
     peer: Option<Extension<axum::extract::ConnectInfo<std::net::SocketAddr>>>,
     headers: HeaderMap,
     body: Body,
+    job_traceparent: String,
 ) -> Response {
     let ct = headers
         .get(header::CONTENT_TYPE)
@@ -601,7 +692,7 @@ pub async fn execute(
         callback_url: req.callback_url,
         callback_secret: req.callback_secret,
         output_mode: req.output,
-        traceparent: traceparent(&headers),
+        traceparent: job_traceparent,
     };
     let timeout_ms = i64::try_from(st.job_timeout.as_millis()).unwrap_or(i64::MAX);
     let job = Job {
