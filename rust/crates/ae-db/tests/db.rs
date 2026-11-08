@@ -379,13 +379,13 @@ async fn finish_with_results_twice_creates_no_duplicates() {
 }
 
 #[tokio::test]
-async fn finish_with_results_rolls_back_on_unknown_submission() {
+async fn finish_with_results_ignores_unknown_submission() {
     let e = env().await;
     let ghost = Uuid::new_v4().to_string();
     let r =
         e.db.finish_with_results(&ghost, Verdict::Accepted, &[result(0, Verdict::Accepted)])
             .await;
-    assert!(r.is_err());
+    assert!(!r.unwrap());
     assert_eq!(
         scalar_i64(&e.db, "SELECT count(*) FROM submission_test_results").await,
         0
@@ -563,4 +563,23 @@ async fn db_futures_are_send_for_worker_tasks() {
     })
     .await
     .unwrap();
+}
+
+#[tokio::test]
+async fn finish_after_cancel_writes_no_results() {
+    let e = env().await;
+    let s = sub();
+    e.db.insert_submission(&s).await.unwrap();
+    assert!(e.db.cancel_submission(&s.id).await.unwrap());
+    let finished =
+        e.db.finish_with_results(&s.id, Verdict::Accepted, &[result(0, Verdict::Accepted)])
+            .await
+            .unwrap();
+    assert!(!finished);
+    assert!(e.db.get_test_results(&s.id).await.unwrap().is_empty());
+    let got = e.db.get_submission(&s.id).await.unwrap().unwrap();
+    assert_eq!(
+        (got.status, got.verdict),
+        (Status::Failed, Some(Verdict::Cancelled))
+    );
 }

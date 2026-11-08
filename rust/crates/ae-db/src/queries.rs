@@ -191,7 +191,8 @@ impl Db {
 
     /// Writes the results and the terminal state in one transaction. Redelivery is a
     /// no-op: results conflict on `(submission_id, test_index)` and the update only
-    /// touches non-terminal rows.
+    /// touches non-terminal rows. Returns true when this call finished the submission, false
+    /// when it was already terminal (nothing is written then).
     ///
     /// # Errors
     /// Fails on a malformed id or a database error; nothing is written then.
@@ -200,7 +201,7 @@ impl Db {
         sub_id: &str,
         verdict: Verdict,
         results: &[TestResult],
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let sid = id(sub_id)?;
         let passed = results
             .iter()
@@ -208,8 +209,11 @@ impl Db {
             .count();
         let cpu: i64 = results.iter().map(|r| r.cpu_time_ns).sum();
         let peak = results.iter().map(|r| r.memory_bytes).max().unwrap_or(0);
+        let count =
+            i32::try_from(results.len()).map_err(|_| Error::Value("too many results".into()))?;
+        let passed = i32::try_from(passed).map_err(|_| Error::Value("too many results".into()))?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query(
+        let finished = sqlx::query(
             "UPDATE submissions SET status = 'completed', verdict = $2, compile_stderr = '', \
              cpu_time_ns = $3, memory_bytes = $4, test_count = $5, tests_passed = $6, \
              updated_at = now() WHERE id = $1 AND status NOT IN ('completed', 'failed')",
@@ -218,11 +222,13 @@ impl Db {
         .bind(wire(verdict)?)
         .bind(cpu)
         .bind(peak)
-        .bind(i32::try_from(results.len()).map_err(|_| Error::Value("too many results".into()))?)
-        .bind(i32::try_from(passed).map_err(|_| Error::Value("too many results".into()))?)
+        .bind(count)
+        .bind(passed)
         .execute(&mut *tx)
-        .await?;
-        if !results.is_empty() {
+        .await?
+        .rows_affected()
+            > 0;
+        if finished && !results.is_empty() {
             let verdicts = results
                 .iter()
                 .map(|r| wire(r.verdict))
@@ -256,7 +262,7 @@ impl Db {
             .await?;
         }
         tx.commit().await?;
-        Ok(())
+        Ok(finished)
     }
 
     /// Marks a non-terminal submission failed with `verdict` and `compile_stderr`
