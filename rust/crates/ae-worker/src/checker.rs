@@ -112,8 +112,14 @@ pub async fn prepare_program(
     Ok(program)
 }
 
+/// Allowance beyond the compile's wall-clock limit for the go-judge round trip.
+pub(crate) const COMPILE_SLACK: Duration = Duration::from_secs(5);
+
 /// One compile, as an owned future (the cache runs it as its own task): the
-/// binary's file id, or [`Error::Compile`] with the diagnostics.
+/// binary's file id, or [`Error::Compile`] with the diagnostics. The go-judge
+/// client has no overall timeout and the detached task outlives its caller, so
+/// the call is bounded here by the compile clock limit plus [`COMPILE_SLACK`];
+/// on expiry the cache clears the flight and waiters retry.
 pub(crate) fn compile(
     sandbox: Arc<dyn Sandbox>,
     lang: &Language,
@@ -126,7 +132,16 @@ pub(crate) fn compile(
         lang.id.clone(),
         lang.placement.binary.clone().unwrap_or_default(),
     );
-    async move { run_compile(sandbox.as_ref(), cmd, &id, &binary).await }
+    let limit = Duration::from_nanos(
+        lang.compile
+            .as_ref()
+            .map_or(0, |c| clock_limit(c.limits.cpu)),
+    ) + COMPILE_SLACK;
+    async move {
+        tokio::time::timeout(limit, run_compile(sandbox.as_ref(), cmd, &id, &binary))
+            .await
+            .unwrap_or_else(|_| Err(Error::Other(format!("compile timed out after {limit:?}"))))
+    }
 }
 
 async fn run_compile(

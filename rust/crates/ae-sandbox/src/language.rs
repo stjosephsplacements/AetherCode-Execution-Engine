@@ -101,7 +101,7 @@ pub struct Language {
     pub compile: Option<CmdTemplate>,
     pub run: CmdTemplate,
     pub placement: Placement,
-    /// Concurrent tests per job; `None` is unbounded.
+    /// Concurrent tests per job; `None` means the worker default (32).
     pub parallelism: Option<usize>,
     pub allowed_flags: Vec<String>,
     /// Self-test program; prints "hello".
@@ -241,7 +241,7 @@ fn check(l: &Language) -> Result<(), String> {
         return Err("compiler probe argv is empty".into());
     }
     if l.parallelism == Some(0) {
-        return Err("parallelism must be at least 1 (omit it for unbounded)".into());
+        return Err("parallelism must be at least 1 (omit it for the default of 32)".into());
     }
     if !in_w(&l.placement.source) || !in_w(&l.placement.binary) {
         return Err("placement paths must be under /w/".into());

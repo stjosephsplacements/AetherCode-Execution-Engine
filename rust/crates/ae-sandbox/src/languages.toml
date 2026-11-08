@@ -9,7 +9,7 @@
 #                 is the floor for a per-request memory limit (JVM heap + metaspace)
 #   compile_cmd.defaults  flags appended unless a caller flag has the same name
 #   allowed_flags caller compiler flags accepted for the language
-#   parallelism   concurrent tests per job; absent means unbounded
+#   parallelism   concurrent tests per job; absent means the worker default (32)
 #   placement     where the source and binary live inside the sandbox; stdin_is_source
 #                 delivers the source on stdin instead of as a file
 #   hello         self-test program; it must print "hello"

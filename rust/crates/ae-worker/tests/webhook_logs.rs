@@ -63,8 +63,15 @@ async fn logs_never_contain_path_query_or_credentials() {
         ok.address()
     );
     assert!(client.dispatch(&url, "s3cret", &payload()).await);
+    // Transport error path: connection refused, reqwest's error text carries the URL.
+    let closed = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let refused = closed.local_addr().unwrap();
+    drop(closed);
+    let url = format!("http://user:pass@{refused}/hook/private?token=SECRET");
+    assert!(!client.dispatch(&url, "s3cret", &payload()).await);
     let out = String::from_utf8(cap.0.lock().unwrap().clone()).unwrap();
     assert!(out.contains(&format!("http://{}", ok.address())), "{out}");
+    assert!(out.contains("webhook attempt failed"), "{out}");
     for secret in [
         "SECRET",
         "token",

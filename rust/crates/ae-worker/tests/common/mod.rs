@@ -40,6 +40,8 @@ pub struct FakeSandbox {
     pub hook: Mutex<Option<Hook>>,
     pub panic_on_run: AtomicBool,
     pub piped_fail: AtomicBool,
+    /// The next compile never returns.
+    pub compile_hang: AtomicBool,
     pub missing: HashSet<String>,
     next_id: AtomicUsize,
 }
@@ -128,6 +130,9 @@ impl Sandbox for FakeSandbox {
         let _g = self.gate.read().await;
         if let Some(bin) = first.copy_out_cached.first() {
             self.compiles.fetch_add(1, Ordering::SeqCst);
+            if self.compile_hang.swap(false, Ordering::SeqCst) {
+                std::future::pending::<()>().await;
+            }
             let fail = self.compile_fail.lock().unwrap().clone();
             let mut r = ok();
             match fail {

@@ -203,7 +203,6 @@ async fn job_cost_matches_actual_concurrency() {
     use ae_worker::runner::{job_cost, job_width};
     let h = Harness::new().await;
     *h.sb.run_delay.lock().unwrap() = Duration::from_millis(5);
-    let c = h.registry.get("c").unwrap().clone();
     let limits = ae_sandbox::RunLimits::default();
     for (n, lang) in [(1000usize, "c"), (20, "python")] {
         h.sb.reset();
@@ -223,7 +222,6 @@ async fn job_cost_matches_actual_concurrency() {
         );
         assert_eq!(h.store.row(&j).results.len(), n);
     }
-    let _ = c;
 }
 
 #[tokio::test(start_paused = true)]
@@ -568,4 +566,41 @@ async fn shutdown_gives_up_on_jobs_after_the_grace_period() {
         .unwrap();
     assert!(start.elapsed() >= Duration::from_millis(200));
     assert_eq!(h.bus.acked(&id(1)), 0, "an abandoned job stays pending");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_stalled_compile_times_out_clears_the_flight_and_later_jobs_retry() {
+    let h = Harness::new().await;
+    for n in 1..=3 {
+        h.job(&id(n), "cpp", CPP, &[("1", "1")]);
+    }
+    h.sb.compile_hang.store(true, Ordering::SeqCst);
+    let w = h.worker();
+    // Job 1 leads the stalled compile; job 2 waits on the same key.
+    let (a, b) = tokio::join!(w.process(delivery(&id(1))), async {
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        w.process(delivery(&id(2))).await
+    });
+    a.unwrap();
+    b.unwrap();
+    let first = h.store.row(&id(1));
+    assert_eq!(first.verdict, Some(Verdict::InternalError));
+    assert!(
+        first.stderr.contains("compile timed out"),
+        "{:?}",
+        first.stderr
+    );
+    assert_eq!(
+        h.store.row(&id(2)).verdict,
+        Some(Verdict::Accepted),
+        "the waiter was stranded"
+    );
+    // A later job with the same key compiles (from cache now) and succeeds.
+    w.process(delivery(&id(3))).await.unwrap();
+    assert_eq!(h.store.row(&id(3)).verdict, Some(Verdict::Accepted));
+    assert_eq!(
+        h.sb.compiles.load(Ordering::SeqCst),
+        2,
+        "stalled call plus one retry"
+    );
 }
