@@ -145,11 +145,40 @@ pub struct RunResult {
     pub file_ids: HashMap<String, String>,
 }
 
+/// One end of a pipe: command index and file descriptor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PipeIndex {
+    pub index: usize,
+    pub fd: u32,
+}
+
+/// Connects `in` (a writer) to `out` (a reader) between two commands of one request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PipeMap {
+    #[serde(rename = "in")]
+    pub input: PipeIndex,
+    #[serde(rename = "out")]
+    pub output: PipeIndex,
+    pub proxy: bool,
+}
+
 /// A code-execution sandbox. Object safe: share it as `Arc<dyn Sandbox>`.
 #[async_trait]
 pub trait Sandbox: Send + Sync {
     /// Runs a batch of commands and returns one result per command, in order.
     async fn run(&self, cmds: Vec<Cmd>) -> Result<Vec<RunResult>, Error>;
+    /// Runs commands wired together by `pipes` (interactive problems). Backends
+    /// without pipe support reject the request.
+    async fn run_piped(
+        &self,
+        cmds: Vec<Cmd>,
+        pipes: Vec<PipeMap>,
+    ) -> Result<Vec<RunResult>, Error> {
+        if pipes.is_empty() {
+            return self.run(cmds).await;
+        }
+        Err(Error::Config("pipe mapping is not supported".into()))
+    }
     /// Stores a file in the sandbox file cache.
     async fn cache_file(&self, name: &str, bytes: &[u8]) -> Result<FileId, Error>;
     /// Removes a cached file.

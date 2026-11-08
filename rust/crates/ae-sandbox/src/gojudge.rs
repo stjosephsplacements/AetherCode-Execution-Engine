@@ -1,6 +1,6 @@
 //! go-judge REST client.
 
-use crate::{Cmd, Error, FileId, RunResult, Sandbox};
+use crate::{Cmd, Error, FileId, PipeMap, RunResult, Sandbox};
 use ae_core::Config;
 use async_trait::async_trait;
 use reqwest::{Client, RequestBuilder, Response};
@@ -41,6 +41,8 @@ impl std::fmt::Debug for GoJudge {
 #[derive(Serialize)]
 struct RunRequest<'a> {
     cmd: &'a [Cmd],
+    #[serde(rename = "pipeMapping", skip_serializing_if = "<[_]>::is_empty")]
+    pipe_mapping: &'a [PipeMap],
 }
 
 impl GoJudge {
@@ -124,10 +126,21 @@ fn valid_file_id(id: &str) -> bool {
 #[async_trait]
 impl Sandbox for GoJudge {
     async fn run(&self, cmds: Vec<Cmd>) -> Result<Vec<RunResult>, Error> {
+        self.run_piped(cmds, Vec::new()).await
+    }
+
+    async fn run_piped(
+        &self,
+        cmds: Vec<Cmd>,
+        pipes: Vec<PipeMap>,
+    ) -> Result<Vec<RunResult>, Error> {
         let rb = self
             .http
             .post(format!("{}/run", self.base_url))
-            .json(&RunRequest { cmd: &cmds });
+            .json(&RunRequest {
+                cmd: &cmds,
+                pipe_mapping: &pipes,
+            });
         let body = self.send(rb, RUN_RESPONSE_MAX).await?;
         let results: Vec<RunResult> = serde_json::from_slice(&body)?;
         if results.len() != cmds.len() {

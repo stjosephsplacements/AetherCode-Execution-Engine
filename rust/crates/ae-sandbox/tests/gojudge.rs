@@ -296,3 +296,46 @@ fn zero_collector_max_is_omitted_like_go() {
     let v = serde_json::to_value(CmdFile::collector("stdout", 5)).unwrap();
     assert_eq!(v, serde_json::json!({"name": "stdout", "max": 5}));
 }
+
+#[tokio::test]
+async fn run_piped_sends_pipe_mapping_and_run_omits_it() {
+    use ae_sandbox::{PipeIndex, PipeMap};
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/run"))
+        .and(body_partial_json(serde_json::json!({"pipeMapping": [
+            {"in": {"index": 0, "fd": 1}, "out": {"index": 1, "fd": 0}, "proxy": true}
+        ]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+            {"status": "Accepted"}, {"status": "Accepted"}
+        ])))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let pipes = vec![PipeMap {
+        input: PipeIndex { index: 0, fd: 1 },
+        output: PipeIndex { index: 1, fd: 0 },
+        proxy: true,
+    }];
+    let res = judge(&server.uri(), "t")
+        .run_piped(vec![echo_cmd(), echo_cmd()], pipes)
+        .await
+        .unwrap();
+    assert_eq!(res.len(), 2);
+
+    let plain = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/run"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!([{"status":"Accepted"}])),
+        )
+        .mount(&plain)
+        .await;
+    judge(&plain.uri(), "t")
+        .run(vec![echo_cmd()])
+        .await
+        .unwrap();
+    let body: serde_json::Value =
+        serde_json::from_slice(&plain.received_requests().await.unwrap()[0].body).unwrap();
+    assert!(body.get("pipeMapping").is_none(), "{body}");
+}
