@@ -716,3 +716,74 @@ async fn blocking_read_with_capacity_two_and_three_streams_does_not_deadlock() {
     drop(tx);
     h.await.unwrap();
 }
+
+#[tokio::test]
+async fn dead_letter_stream_is_configurable() {
+    let mut e = env().await;
+    let q = e.q.clone().with_dead_letter_stream("ac:dlq:poison:rust");
+    go_enqueue(&mut e.rdb, SUBMIT, "poison").await;
+    assert_eq!(q.read_batch().await.unwrap().len(), 1);
+    let (tx, _rx) = mpsc::channel(16);
+    for _ in 0..4 {
+        q.reclaim_once(&tx, Duration::ZERO).await.unwrap();
+    }
+    assert_eq!(q.poisoned(), 1);
+    let len = |s: &'static str| {
+        let mut r = e.rdb.clone();
+        async move {
+            redis::cmd("XLEN")
+                .arg(s)
+                .query_async::<u64>(&mut r)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(len("ac:dlq:poison:rust").await, 1);
+    assert_eq!(len("ac:dlq:poison").await, 0);
+}
+
+/// An expiry store that records elsewhere and announces nothing.
+struct Silent;
+impl ae_queue::ExpiryStore for Silent {
+    fn fail_expired<'a>(
+        &'a self,
+        _job_id: &'a str,
+        _verdict: ae_core::model::Verdict,
+        _message: &'a str,
+    ) -> ae_queue::BoxFuture<'a, ae_queue::Result<bool>> {
+        Box::pin(async { Ok(true) })
+    }
+    fn publishes_events(&self) -> bool {
+        false
+    }
+}
+
+#[tokio::test]
+async fn expiry_store_can_suppress_the_verdict_event() {
+    let mut e = env().await;
+    let q = ae_queue::Queue::connect(&common::cfg(&e.addr, &[]), std::sync::Arc::new(Silent))
+        .await
+        .unwrap();
+    q.prepare_and_enqueue(&job("late", Some(now_ms() - 1_000)), &one_test(), RUN)
+        .await
+        .unwrap();
+    let (tx, mut rx) = mpsc::channel(4);
+    let qc = q.clone();
+    let h = tokio::spawn(async move { qc.consume(tx).await });
+    assert!(
+        timeout(Duration::from_millis(800), rx.recv())
+            .await
+            .is_err()
+    );
+    drop(rx);
+    h.await.unwrap();
+    assert_eq!(pending(&mut e.rdb, RUN).await, 0, "expired entry acked");
+    let kinds: Vec<_> = q
+        .replay("late")
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|e| e.kind)
+        .collect();
+    assert_eq!(kinds, [EventType::Queued]);
+}

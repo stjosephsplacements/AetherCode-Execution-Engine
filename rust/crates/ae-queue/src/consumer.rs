@@ -70,7 +70,7 @@ impl Queue {
                 return;
             }
         };
-        if publish {
+        if publish && self.store.publishes_events() {
             let ev = Event::new(
                 job_id,
                 EventType::Verdict,

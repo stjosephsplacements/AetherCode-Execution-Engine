@@ -152,7 +152,7 @@ impl Queue {
             "reclaimer: dead-lettering poison message"
         );
         let r: redis::RedisResult<String> = redis::cmd("XADD")
-            .arg(DLQ_STREAM)
+            .arg(&self.dlq)
             .arg("MAXLEN")
             .arg("~")
             .arg(10_000)

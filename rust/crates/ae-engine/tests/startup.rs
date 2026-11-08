@@ -229,10 +229,12 @@ async fn sigterm_drains_then_exits_zero() {
     );
 }
 
-#[tokio::test]
-async fn shadow_mode_writes_only_shadow_key() {
-    let infra = infra().await;
-    let judge = FakeJudge::start(&[]).await;
+/// Migrates, inserts a queued python submission and enqueues it on the submit stream
+/// as the Go engine's gateway would. Returns (db, queue, job id).
+async fn seed_job(
+    infra: &common::Infra,
+    expires_at: Option<i64>,
+) -> (ae_db::Db, ae_queue::Queue, String) {
     let cfg = infra.config();
     let db = ae_db::connect(&cfg).await.unwrap();
     db.migrate().await.unwrap();
@@ -267,7 +269,7 @@ async fn shadow_mode_writes_only_shadow_key() {
         limits: Limits::default(),
         checker: Checker::Exact,
         tests_key: format!("ac:tests:{id}"),
-        expires_at: None,
+        expires_at,
     };
     let set = TestSet {
         tests: vec![TestData {
@@ -282,6 +284,63 @@ async fn shadow_mode_writes_only_shadow_key() {
         .prepare_and_enqueue(&job, &set, "ac:submissions:submit")
         .await
         .unwrap();
+    (db, queue, id)
+}
+
+/// Polls `ac:shadow:<id>` until it exists.
+async fn shadow_record(r: &mut redis::aio::ConnectionManager, id: &str) -> Value {
+    let key = format!("ac:shadow:{id}");
+    let deadline = tokio::time::Instant::now() + STARTUP;
+    loop {
+        let got: Option<String> = redis::cmd("GET").arg(&key).query_async(r).await.unwrap();
+        if let Some(raw) = got {
+            return serde_json::from_str(&raw).unwrap();
+        }
+        assert!(tokio::time::Instant::now() < deadline, "no shadow verdict");
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+#[tokio::test]
+async fn shadow_expired_job_publishes_nothing() {
+    let infra = infra().await;
+    let judge = FakeJudge::start(&[]).await;
+    let (db, queue, id) = seed_job(&infra, Some(1)).await;
+    let mut sub = queue.subscribe(&id).await.unwrap();
+    let _e = spawn_engine(
+        &infra,
+        &EngineOpts {
+            args: &["--role", "worker", "--shadow"],
+            judge_url: &judge.url,
+            env: &[],
+        },
+    );
+    let mut r = infra.redis().await;
+    let v = shadow_record(&mut r, &id).await;
+    assert_eq!(v["verdict"], "internal_error", "{v}");
+    let log_len: u64 = redis::cmd("LLEN")
+        .arg(format!("ac:events:{id}:log"))
+        .query_async(&mut r)
+        .await
+        .unwrap();
+    assert_eq!(log_len, 1, "only the enqueue's QUEUED");
+    // Pub/sub: nothing after QUEUED (published before the subscription).
+    let got = tokio::time::timeout(Duration::from_millis(500), sub.recv()).await;
+    assert!(!matches!(got, Ok(Some(_))), "shadow published {got:?}");
+    let row = db.get_submission(&id).await.unwrap().unwrap();
+    assert_eq!((row.status, row.verdict), (Status::Queued, None));
+    assert_eq!(
+        v["results"].as_array().map(Vec::len),
+        Some(0),
+        "never ran: {v}"
+    );
+}
+
+#[tokio::test]
+async fn shadow_mode_writes_only_shadow_key() {
+    let infra = infra().await;
+    let judge = FakeJudge::start(&[]).await;
+    let (db, queue, id) = seed_job(&infra, None).await;
 
     // The gateway cannot run in shadow mode.
     for role in ["all", "gateway"] {
@@ -300,7 +359,7 @@ async fn shadow_mode_writes_only_shadow_key() {
         assert!(!s.success(), "--shadow --role {role}");
     }
 
-    let _e = spawn_engine(
+    let e = spawn_engine(
         &infra,
         &EngineOpts {
             args: &["--role", "worker", "--shadow"],
@@ -310,20 +369,7 @@ async fn shadow_mode_writes_only_shadow_key() {
     );
     let mut r = infra.redis().await;
     let key = format!("ac:shadow:{id}");
-    let deadline = tokio::time::Instant::now() + STARTUP;
-    let raw = loop {
-        let got: Option<String> = redis::cmd("GET")
-            .arg(&key)
-            .query_async(&mut r)
-            .await
-            .unwrap();
-        if let Some(raw) = got {
-            break raw;
-        }
-        assert!(tokio::time::Instant::now() < deadline, "no shadow verdict");
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    };
-    let v: Value = serde_json::from_str(&raw).unwrap();
+    let v = shadow_record(&mut r, &id).await;
     assert_eq!(v["verdict"], "accepted", "{v}");
     assert_eq!(v["results"].as_array().unwrap().len(), 1, "{v}");
     assert_eq!(v["results"][0]["verdict"], "accepted", "{v}");
@@ -357,6 +403,10 @@ async fn shadow_mode_writes_only_shadow_key() {
     };
     assert_eq!(field(&group("workers"), "last-delivered-id"), "0-0");
     assert_eq!(field(&group("workers-rust"), "pending"), "0");
+    assert!(
+        !e.has_log("webhook already dispatched") && !e.has_log("webhook marker"),
+        "shadow mode must not touch webhooks, even in logs"
+    );
 }
 
 fn field(g: &HashMap<String, redis::Value>, k: &str) -> String {

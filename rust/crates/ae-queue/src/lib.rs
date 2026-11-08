@@ -49,6 +49,13 @@ pub trait ExpiryStore: Send + Sync + 'static {
         verdict: Verdict,
         message: &'a str,
     ) -> BoxFuture<'a, Result<bool>>;
+
+    /// Whether the queue announces a recorded expiry as a VERDICT event. A store that
+    /// records expiries somewhere other than the authoritative row (shadow mode) returns
+    /// false so the production event log is never written.
+    fn publishes_events(&self) -> bool {
+        true
+    }
 }
 
 pub type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
@@ -81,6 +88,8 @@ pub struct Queue {
     master_key: Option<Arc<[u8]>>,
     store: Arc<dyn ExpiryStore>,
     poisoned: Arc<AtomicU64>,
+    /// Where poison messages go ([`DLQ_STREAM`] unless overridden).
+    dlq: String,
     /// Weighted-round-robin position, shared by clones (see `tier_counts`).
     cursor: Arc<std::sync::atomic::AtomicUsize>,
     hub: Arc<tokio::sync::Mutex<Option<events::HubHandle>>>,
@@ -133,6 +142,7 @@ impl Queue {
             master_key: cfg.webhook_master_key.as_deref().map(Arc::from),
             store,
             poisoned: Arc::new(AtomicU64::new(0)),
+            dlq: DLQ_STREAM.to_owned(),
             cursor: Arc::default(),
             hub: Arc::new(tokio::sync::Mutex::new(None)),
         };
@@ -140,6 +150,13 @@ impl Queue {
             q.create_group(s).await?;
         }
         Ok(q)
+    }
+
+    /// Dead-letters poison messages to `stream` instead of [`DLQ_STREAM`].
+    #[must_use]
+    pub fn with_dead_letter_stream(mut self, stream: &str) -> Self {
+        stream.clone_into(&mut self.dlq);
+        self
     }
 
     /// Consumer name used for `XREADGROUP` (`$HOSTNAME-<pid>`).

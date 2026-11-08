@@ -15,6 +15,9 @@ use serde::Serialize;
 use std::time::Duration;
 use tokio::sync::mpsc;
 
+/// Dead-letter stream of the shadow group, kept apart from the Go engine's `ac:dlq:poison`.
+pub const DLQ_STREAM: &str = "ac:dlq:poison:rust";
+
 /// Lifetime of an `ac:shadow:<job_id>` record.
 pub const SHADOW_TTL: Duration = Duration::from_secs(60 * 60);
 
@@ -130,9 +133,13 @@ impl Store for ShadowStore {
         self.sink.record(id, verdict, &[], stderr).await?;
         Ok(true)
     }
-    /// Always "already delivered", so the worker never dispatches a webhook.
+    /// Never called while [`Store::webhooks_enabled`] is false; "already delivered"
+    /// keeps it inert regardless.
     async fn mark_webhook_delivered(&self, _id: &str) -> Result<bool> {
         Ok(false)
+    }
+    fn webhooks_enabled(&self) -> bool {
+        false
     }
 }
 
@@ -171,8 +178,14 @@ impl ExpiryStore for ShadowExpiry {
                 .record(job_id, verdict, &[], message)
                 .await
                 .map_err(|e| ae_queue::Error::Corrupt(e.to_string()))?;
-            Ok(true)
+            // false: nothing authoritative was recorded, so nothing may be announced.
+            Ok(false)
         })
+    }
+
+    /// The production event log and pub/sub belong to the authoritative engine.
+    fn publishes_events(&self) -> bool {
+        false
     }
 }
 
@@ -182,5 +195,7 @@ mod tests {
     fn names() {
         assert_eq!(super::group("workers"), "workers-rust");
         assert_eq!(super::key("j"), "ac:shadow:j");
+        assert_eq!(super::DLQ_STREAM, "ac:dlq:poison:rust");
+        assert_ne!(super::DLQ_STREAM, ae_queue::DLQ_STREAM);
     }
 }

@@ -240,7 +240,8 @@ pub async fn run(s: Settings) -> Result<(), String> {
         qcfg.consumer_group = shadow::group(&cfg.consumer_group);
         let q = Queue::connect(&qcfg, Arc::new(ShadowExpiry(sink.clone())))
             .await
-            .map_err(|e| format!("redis stream group creation failed: {e}"))?;
+            .map_err(|e| format!("redis stream group creation failed: {e}"))?
+            .with_dead_letter_stream(shadow::DLQ_STREAM);
         (q, Some(sink))
     } else {
         let q = Queue::connect(&cfg, Arc::new(db.clone()))

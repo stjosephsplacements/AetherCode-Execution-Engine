@@ -58,6 +58,11 @@ pub trait Store: Send + Sync + 'static {
     async fn fail_submission(&self, id: &str, verdict: Verdict, stderr: &str) -> Result<bool>;
     /// True only for the first call per submission.
     async fn mark_webhook_delivered(&self, id: &str) -> Result<bool>;
+    /// False for stores whose results are not authoritative (shadow mode): the worker
+    /// then never marks or dispatches webhooks.
+    fn webhooks_enabled(&self) -> bool {
+        true
+    }
 }
 
 /// Job input, progress events and the delivery stream.

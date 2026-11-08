@@ -423,7 +423,7 @@ impl Worker {
         obs.stage("publish", publish_start.elapsed());
         obs.job_finished(lang_id, outcome.verdict, started.elapsed());
 
-        if !set.callback_url.is_empty() {
+        if !set.callback_url.is_empty() && inner.store.webhooks_enabled() {
             match inner.store.mark_webhook_delivered(id).await {
                 Ok(true) => {
                     let payload = WebhookPayload {
