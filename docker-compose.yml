@@ -86,7 +86,7 @@ services:
   # Rust engine (distroless image: no shell or curl, hence no container healthcheck).
   #   docker compose --profile rust up --build engine-rs        # API on http://127.0.0.1:5101
   # Own submit/run/bulk streams so it never competes with the Go engine's consumers.
-  # Probes: /livez and /readyz on 5101. Metrics are bound to the container's loopback only.
+  # Probes: /livez and /readyz on 5101. Metrics stay on the container's loopback (AC_DEBUG_ADDR default).
   engine-rs:
     profiles: ["rust"]
     build:
@@ -104,7 +104,7 @@ services:
       AC_WORKERS: "${AC_WORKERS:-8}"
       AC_ROLE: "${AC_ROLE:-all}"
       AC_AUTH_ENABLED: "${AC_AUTH_ENABLED:-false}"
-      AC_ALLOW_UNAUTH: "true"
+      AC_ALLOW_UNAUTH: "${AC_ALLOW_UNAUTH:-true}"
       AC_LOG_FORMAT: "text"
       AC_SUBMIT_STREAM: "ac:rs:submissions:submit"
       AC_RUN_STREAM: "ac:rs:submissions:run"
@@ -132,7 +132,9 @@ services:
     image: aethercode-exec-rs:dev
     command: ["--role", "worker", "--shadow"]
     environment:
-      AC_DATABASE_URL: "postgres://${POSTGRES_USER:-aethercode}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-aethercode_exec}"
+      # Dev default is the owner DSN. Outside a throwaway stack set AC_SHADOW_DATABASE_URL to a
+      # read-only role (SQL in docs/ARCHITECTURE.md, "Shadow database role").
+      AC_DATABASE_URL: "${AC_SHADOW_DATABASE_URL:-postgres://${POSTGRES_USER:-aethercode}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-aethercode_exec}}"
       AC_REDIS_ADDR: "redis:6379"
       AC_JUDGE_URL: "http://go-judge:5050"
       AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN}"

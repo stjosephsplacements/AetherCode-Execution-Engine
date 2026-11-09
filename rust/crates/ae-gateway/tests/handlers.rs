@@ -673,7 +673,22 @@ async fn livez_readyz_and_metrics() {
     tokio::time::sleep(Duration::from_millis(1100)).await;
     assert!(st.state.drain().rate() > 0.0, "job_ended feeds the drain");
     ae_gateway::metrics::sample_queues(&st.queue).await;
-    let m = ae_gateway::metrics_router();
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let m = ae_gateway::metrics_router(ready.clone());
+    for (flag, want) in [(false, 503), (true, 200)] {
+        ready.store(flag, std::sync::atomic::Ordering::SeqCst);
+        for (path, code) in [("/livez", 200), ("/readyz", want)] {
+            let r = tower::ServiceExt::oneshot(
+                m.clone(),
+                axum::http::Request::get(path)
+                    .body(axum::body::Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(r.status(), code, "{path} ready={flag}");
+        }
+    }
     let resp = tower::ServiceExt::oneshot(
         m,
         axum::http::Request::get("/metrics")

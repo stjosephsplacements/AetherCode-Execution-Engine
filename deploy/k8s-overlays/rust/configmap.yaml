@@ -9,7 +9,10 @@ data:
   AC_WORKERS: "16"             # concurrency budget per worker pod (0 = a quarter of the cores)
   AC_COMPILE_CACHE_MAX_MB: "512"
   AC_PREWARM: "16"
-  AC_DEBUG_PORT: "6060"        # loopback only; reached through the metrics-proxy sidecar
+  AC_DEBUG_PORT: "6060"
+  # /metrics, /livez, /readyz are bound to the pod IP so Prometheus and the kubelet can
+  # reach them; networkpolicy.yaml restricts 6060 to Prometheus (the kubelet is exempt).
+  AC_DEBUG_ADDR: "0.0.0.0"
   AC_LOG_FORMAT: "json"
   AC_LOG_LEVEL: "info"
   # AC_OTLP_ENDPOINT: "http://otel-collector:4318"

@@ -119,8 +119,8 @@ groups:
             sent as many jobs (one per test), check that the caller is not
             defeating the compile cache.
 
-  # Rust engine (rust/Dockerfile). Scrape it as job "aethercode-exec-rs" through the
-  # metrics sidecar (deploy/k8s-overlays/rust): the engine binds metrics to 127.0.0.1 only.
+  # Rust engine (rust/Dockerfile). Scrape it as job "aethercode-exec-rs": in Kubernetes
+  # port 6060 of every pod (AC_DEBUG_ADDR=0.0.0.0, annotations in deploy/k8s-overlays).
   - name: aethercode-exec-rs
     rules:
       - alert: RustEngineDown

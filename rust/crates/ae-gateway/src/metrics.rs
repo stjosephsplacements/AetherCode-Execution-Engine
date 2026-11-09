@@ -208,20 +208,34 @@ pub fn verdict_label(v: Verdict) -> String {
     }
 }
 
-/// `GET /metrics` for the loopback debug listener (`127.0.0.1:6060`).
-pub fn metrics_router() -> Router {
-    Router::new().route(
-        "/metrics",
-        get(|| async {
-            (
-                [(
-                    header::CONTENT_TYPE,
-                    HeaderValue::from_static("text/plain; version=0.0.4"),
-                )],
-                metrics().render(),
-            )
-        }),
-    )
+/// The debug listener (`AC_DEBUG_ADDR:AC_DEBUG_PORT`, loopback by default): `/metrics`
+/// plus `/livez` (always 200) and `/readyz` (200 while `ready` is set, else 503), so
+/// worker-only pods, which serve no public HTTP, have probe endpoints. Nothing else.
+pub fn metrics_router(ready: std::sync::Arc<std::sync::atomic::AtomicBool>) -> Router {
+    Router::new()
+        .route(
+            "/metrics",
+            get(|| async {
+                (
+                    [(
+                        header::CONTENT_TYPE,
+                        HeaderValue::from_static("text/plain; version=0.0.4"),
+                    )],
+                    metrics().render(),
+                )
+            }),
+        )
+        .route("/livez", get(livez))
+        .route(
+            "/readyz",
+            get(move || async move {
+                if ready.load(std::sync::atomic::Ordering::SeqCst) {
+                    (StatusCode::OK, "ok\n").into_response()
+                } else {
+                    (StatusCode::SERVICE_UNAVAILABLE, "not ready\n").into_response()
+                }
+            }),
+        )
 }
 
 /// Records `ac_http_requests_total` and `ac_http_request_duration_seconds` with the route

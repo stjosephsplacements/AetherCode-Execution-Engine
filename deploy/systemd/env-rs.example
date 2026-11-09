@@ -12,8 +12,10 @@ AC_ROLE=all
 AC_WORKERS=64
 AC_COMPILE_CACHE_MAX_MB=1024
 AC_PREWARM=16
-# Prometheus metrics: loopback only, http://127.0.0.1:6060/metrics
+# Metrics and probes (/metrics, /livez, /readyz): loopback by default, http://127.0.0.1:6060.
+# Set AC_DEBUG_ADDR=0.0.0.0 only if Prometheus runs on another host AND a firewall restricts it.
 AC_DEBUG_PORT=6060
+# AC_DEBUG_ADDR=127.0.0.1
 # AC_OTLP_ENDPOINT=http://127.0.0.1:4318
 # AC_LANGUAGES_FILE=/etc/aethercode-exec-rs/languages.toml
 

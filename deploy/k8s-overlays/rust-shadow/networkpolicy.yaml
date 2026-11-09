@@ -1,0 +1,77 @@
+# Prometheus is admitted on 6060 from namespaces labelled kubernetes.io/metadata.name=monitoring
+# AND pods labelled app.kubernetes.io/name=prometheus. Edit both selectors to match your
+# installation. Kubelet probes are not blocked by NetworkPolicy.
+# The shadow worker takes no client traffic (and no Service selects it): only Prometheus on 6060; egress to DNS, go-judge, Postgres, Redis.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aethercode-exec-rs-shadow-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aethercode-exec-rs
+      app.kubernetes.io/component: shadow-worker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 6060
+  egress:
+    - to: []
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-judge
+      ports:
+        - protocol: TCP
+          port: 5050
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-judge-allow-rust-shadow
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: go-judge
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aethercode-exec-rs
+              app.kubernetes.io/component: shadow-worker
+      ports:
+        - protocol: TCP
+          port: 5050

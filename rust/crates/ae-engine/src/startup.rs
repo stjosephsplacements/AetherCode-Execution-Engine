@@ -113,9 +113,16 @@ pub async fn prewarm(sb: &dyn Sandbox, n: usize) {
     tracing::info!(slots = n, ok, elapsed = ?start.elapsed(), "sandbox pre-warmed");
 }
 
-/// Binds the loopback-only metrics listener (`127.0.0.1:AC_DEBUG_PORT`). Fatal on failure.
+/// Binds the metrics and probe listener (`AC_DEBUG_ADDR:AC_DEBUG_PORT`, loopback by
+/// default). Fatal on failure.
 async fn bind_debug(cfg: &Config) -> Result<tokio::net::TcpListener, String> {
-    let addr = SocketAddr::from(([127, 0, 0, 1], cfg.debug_port));
+    let addr = SocketAddr::new(cfg.debug_addr, cfg.debug_port);
+    if !addr.ip().is_loopback() {
+        tracing::warn!(
+            addr = %addr,
+            "debug listener (/metrics, /livez, /readyz) is exposed beyond loopback; restrict it with a NetworkPolicy or firewall"
+        );
+    }
     let l = tokio::net::TcpListener::bind(addr)
         .await
         .map_err(|e| format!("debug/metrics listen {addr}: {e}"))?;
@@ -289,10 +296,13 @@ pub async fn run(s: Settings) -> Result<(), String> {
         "queue sampler",
         spawn_queue_sampler(queue.clone(), QUEUE_SAMPLE),
     );
+    // Shared by the debug listener's /readyz and, when there is one, the gateway's.
+    let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let debug = bind_debug(&cfg).await?;
     let stop = http_stop.clone().cancelled_owned();
+    let debug_ready = ready.clone();
     let debug = tokio::spawn(async move {
-        axum::serve(debug, ae_gateway::metrics_router())
+        axum::serve(debug, ae_gateway::metrics_router(debug_ready))
             .with_graceful_shutdown(stop)
             .await
             .map_err(|e| format!("debug server: {e}"))
@@ -304,7 +314,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
         let auth = AuthLayer::from_config(&cfg, Arc::new(db.clone()))
             .await
             .map_err(|e| format!("auth middleware init failed: {e}"))?;
-        let state = AppState::new(
+        let mut state = AppState::new(
             &cfg,
             db.clone(),
             queue.clone(),
@@ -313,6 +323,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
             auth,
             redis.clone(),
         );
+        state.ready = ready.clone();
         let listener = tokio::net::TcpListener::bind(&cfg.gateway_addr)
             .await
             .map_err(|e| format!("gateway listen {}: {e}", cfg.gateway_addr))?;
@@ -372,9 +383,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
         draining.push(tokio::spawn(worker.run(token.clone())));
     }
 
-    if let Some(st) = &state {
-        st.set_ready(true);
-    }
+    ready.store(true, std::sync::atomic::Ordering::SeqCst);
     tracing::info!(role = ?role, shadow, "engine ready");
 
     // Runs until a signal, or until a listener or supervised task dies. A listener that
@@ -392,9 +401,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
     }
     token.cancel();
     tracing::info!("shutting down");
-    if let Some(st) = &state {
-        st.set_ready(false);
-    }
+    ready.store(false, std::sync::atomic::Ordering::SeqCst);
     // Workers stop reading at once and get the grace period for in-flight jobs; HTTP keeps
     // serving (not ready) meanwhile so clients can still read results.
     tracing::info!("waiting for in-flight jobs to complete");

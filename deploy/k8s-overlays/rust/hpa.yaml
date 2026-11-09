@@ -1,15 +1,32 @@
-# Gateway: CPU. Workers: age of the oldest queue entry (ac_queue_age_seconds).
+# Gateway: CPU. Workers: age of the oldest queue entry.
 #
-# The worker HPA needs the external metrics API (external.metrics.k8s.io). Either:
-#  1. Prometheus Adapter with a rule like
-#       externalRules:
-#         - seriesQuery: 'ac_queue_age_seconds{job="aethercode-exec-rs"}'
-#           resources: {namespaced: false}
-#           name: {as: "ac_queue_age_seconds"}
-#           metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (stream)'
-#     (max, not sum: every pod samples the same stream, so the series are duplicates), or
-#  2. KEDA: replace this HPA with a ScaledObject using a prometheus trigger on
-#     max(ac_queue_age_seconds{stream="ac:submissions:submit"}) with threshold 10.
+# The worker HPA needs the external metrics API (external.metrics.k8s.io) to serve
+# ac_queue_age_seconds_max. Define it with ONE of:
+#
+# 1. Prometheus Adapter (externalRules). The stream filter lives in the query because
+#    label values such as "ac:submissions:submit" are not valid selector values:
+#      externalRules:
+#        - seriesQuery: 'ac_queue_age_seconds'
+#          resources: {namespaced: false}
+#          name: {as: "ac_queue_age_seconds_max"}
+#          metricsQuery: 'max(ac_queue_age_seconds{stream=~"ac:submissions:(submit|run)"})'
+#    (max, not sum: every pod samples the same streams, so the series are duplicates).
+#
+# 2. KEDA: delete this HPA for the workers and use a ScaledObject:
+#      apiVersion: keda.sh/v1alpha1
+#      kind: ScaledObject
+#      metadata: {name: aethercode-exec-rs-worker, namespace: aethercode}
+#      spec:
+#        scaleTargetRef: {name: aethercode-exec-rs-worker}
+#        minReplicaCount: 2
+#        maxReplicaCount: 20
+#        triggers:
+#          - type: prometheus
+#            metadata:
+#              serverAddress: http://prometheus.monitoring:9090
+#              query: max(ac_queue_age_seconds{stream=~"ac:submissions:(submit|run)"})
+#              threshold: "10"
+#
 # Without one of them this HPA reports "unable to get external metric" and holds its replicas.
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -27,13 +44,10 @@ spec:
     - type: External
       external:
         metric:
-          name: ac_queue_age_seconds
-          selector:
-            matchLabels:
-              stream: ac:submissions:submit
+          name: ac_queue_age_seconds_max
         target:
           type: Value
-          value: "10"   # seconds the oldest submission may wait
+          value: "10"   # seconds the oldest entry may wait
   behavior:
     scaleDown:
       stabilizationWindowSeconds: 300  # pods drain for up to 120 s; scale in slowly

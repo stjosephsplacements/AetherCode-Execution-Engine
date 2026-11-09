@@ -1,11 +1,18 @@
-# Adds the Rust engine beside the Go engine. The Go resources are untouched:
+# REAL CUTOVER overlay: gateway + worker Deployments of the Rust engine.
 #
+# This includes the Go base (../../k8s, unchanged) and adds Rust pods that serve traffic.
+# The Rust workers join the SAME consumer group as the Go workers, so applying this
+# splits real jobs between the two engines. To only compare, apply ../rust-shadow instead.
+#
+#   kustomize edit set image ghcr.io/stjosephsplacements/aethercode-exec-rs=ghcr.io/<owner>/aethercode-exec-rs:<tag>
 #   kubectl apply -k deploy/k8s-overlays/rust/
 #
 # Prerequisites:
 #   - deploy/k8s/.env.secret (same secret the Go engine uses; see .env.secret.example)
-#   - an external-metrics API serving ac_queue_age_seconds for the worker HPA
-#     (Prometheus Adapter, or KEDA; see hpa.yaml and docs/ARCHITECTURE.md)
+#   - an external metrics API serving ac_queue_age_seconds_max for the worker HPA
+#     (Prometheus Adapter or KEDA; rule in hpa.yaml, docs/ARCHITECTURE.md)
+#   - a Prometheus namespace labelled kubernetes.io/metadata.name=monitoring with pods
+#     labelled app.kubernetes.io/name=prometheus (see networkpolicy.yaml)
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
@@ -14,18 +21,15 @@ namespace: aethercode
 resources:
   - ../../k8s
   - configmap.yaml
-  - metrics-proxy-configmap.yaml
   - gateway.yaml
   - worker.yaml
-  - shadow-worker.yaml
   - service.yaml
   - pdb.yaml
   - hpa.yaml
   - networkpolicy.yaml
 
-# The Rust image is built from rust/Dockerfile. It is not published by the release
-# workflow yet; set the registry and tag you pushed it to:
-#   kustomize edit set image ghcr.io/stjosephsplacements/aethercode-exec-rs=<registry>/aethercode-exec-rs:<tag>
+# The image is not published by the release workflow yet and there is no default tag:
+# the placeholder below fails the pull until you set the tag you pushed.
 images:
   - name: ghcr.io/stjosephsplacements/aethercode-exec-rs
-    newTag: latest
+    newTag: SET_ME

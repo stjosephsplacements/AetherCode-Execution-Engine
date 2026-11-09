@@ -1,4 +1,4 @@
-# Rust engine, gateway role: POST /api/v1/execute, SSE, results. Needs go-judge for health and language self-tests.
+# Rust engine, gateway role: POST /api/v1/execute, SSE, results. Replicas are owned by the HPA (hpa.yaml).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -8,7 +8,6 @@ metadata:
     app.kubernetes.io/name: aethercode-exec-rs
     app.kubernetes.io/component: gateway
 spec:
-  replicas: 2
   selector:
     matchLabels:
       app.kubernetes.io/name: aethercode-exec-rs
@@ -23,7 +22,7 @@ spec:
         app.kubernetes.io/component: gateway
       annotations:
         prometheus.io/scrape: "true"
-        prometheus.io/port: "9090"
+        prometheus.io/port: "6060"
         prometheus.io/path: "/metrics"
     spec:
       securityContext:
@@ -37,11 +36,13 @@ spec:
       terminationGracePeriodSeconds: 150
       containers:
         - name: engine
-          image: ghcr.io/stjosephsplacements/aethercode-exec-rs:latest
-          imagePullPolicy: Always
+          # The tag comes from images: in kustomization.yaml (kustomize edit set image).
+          image: ghcr.io/stjosephsplacements/aethercode-exec-rs
+          imagePullPolicy: IfNotPresent
           args: ["--role", "gateway"]
           ports:
             - {name: http, containerPort: 5100, protocol: TCP}
+            - {name: debug, containerPort: 6060, protocol: TCP}
           envFrom:
             - configMapRef:
                 name: aethercode-exec-config
@@ -50,8 +51,8 @@ spec:
             - secretRef:
                 name: aethercode-exec-secrets
           env:
-            - {name: AC_AUTH_ENABLED, value: "true"}
             - {name: AC_GATEWAY_ADDR, value: "0.0.0.0:5100"}
+            - {name: AC_AUTH_ENABLED, value: "true"}
           resources:
             requests: {cpu: "500m", memory: "256Mi"}
             limits: {cpu: "2000m", memory: "1Gi"}
@@ -74,28 +75,3 @@ spec:
             readOnlyRootFilesystem: true
             capabilities:
               drop: [ALL]
-        # Exposes the loopback-only metrics listener to Prometheus; see metrics-proxy-configmap.yaml.
-        - name: metrics-proxy
-          image: nginxinc/nginx-unprivileged:1.27-alpine
-          ports:
-            - {name: metrics, containerPort: 9090, protocol: TCP}
-          resources:
-            requests: {cpu: "10m", memory: "16Mi"}
-            limits: {cpu: "100m", memory: "64Mi"}
-          readinessProbe:
-            httpGet: {path: /metrics, port: metrics}
-            periodSeconds: 10
-          securityContext:
-            allowPrivilegeEscalation: false
-            readOnlyRootFilesystem: true
-            capabilities:
-              drop: [ALL]
-          volumeMounts:
-            - {name: nginx-conf, mountPath: /etc/nginx/nginx.conf, subPath: nginx.conf, readOnly: true}
-            - {name: tmp, mountPath: /tmp}
-      volumes:
-        - name: nginx-conf
-          configMap:
-            name: aethercode-exec-rs-metrics-proxy
-        - name: tmp
-          emptyDir: {}

@@ -50,3 +50,6 @@ postman_collection_generated.json
 # Superpowers skill docs (local only)
 docs/superpowers/
 rust/target/
+
+# Shadow worker DB credentials
+deploy/k8s-overlays/rust-shadow/.env.shadow

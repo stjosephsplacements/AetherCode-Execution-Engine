@@ -65,8 +65,11 @@ pub struct Config {
     pub otlp_endpoint: String,
     /// `AC_LANGUAGES_FILE`: TOML language table replacing the built-in one; empty uses the built-in.
     pub languages_file: String,
-    /// `AC_DEBUG_PORT`: port of the loopback-only metrics listener (always 127.0.0.1).
+    /// `AC_DEBUG_PORT`: port of the metrics and probe listener.
     pub debug_port: u16,
+    /// `AC_DEBUG_ADDR`: address that listener binds (default loopback). Anything else
+    /// exposes `/metrics` and the probes to the network and must be NetworkPolicy-restricted.
+    pub debug_addr: std::net::IpAddr,
 }
 
 impl Config {
@@ -144,6 +147,15 @@ impl Config {
             otlp_endpoint: s("AC_OTLP_ENDPOINT", ""),
             languages_file: s("AC_LANGUAGES_FILE", ""),
             debug_port: num(m, "AC_DEBUG_PORT", 6060)?,
+            debug_addr: num(m, "AC_DEBUG_ADDR", std::net::IpAddr::from([127, 0, 0, 1])).map_err(
+                |_| {
+                    invalid(
+                        "AC_DEBUG_ADDR",
+                        get(m, "AC_DEBUG_ADDR").unwrap_or_default(),
+                        "IP address",
+                    )
+                },
+            )?,
         })
     }
 
@@ -390,6 +402,24 @@ mod tests {
         assert_eq!(c.max_queue_depth(), 12);
         let c = Config::from_map(&map(&[("AC_WORKERS", "3")])).unwrap();
         assert_eq!(c.max_queue_depth(), 5000);
+    }
+
+    #[test]
+    fn debug_addr_defaults_to_loopback_and_is_validated() {
+        let c = Config::from_map(&map(&[])).unwrap();
+        assert_eq!(c.debug_addr, std::net::IpAddr::from([127, 0, 0, 1]));
+        let c = Config::from_map(&map(&[("AC_DEBUG_ADDR", "0.0.0.0")])).unwrap();
+        assert_eq!(c.debug_addr, std::net::IpAddr::from([0, 0, 0, 0]));
+        let c = Config::from_map(&map(&[("AC_DEBUG_ADDR", "::1")])).unwrap();
+        assert!(c.debug_addr.is_loopback());
+        let e = Config::from_map(&map(&[("AC_DEBUG_ADDR", "localhost")])).unwrap_err();
+        assert!(matches!(
+            e,
+            ConfigError::Invalid {
+                key: "AC_DEBUG_ADDR",
+                ..
+            }
+        ));
     }
 
     #[test]

@@ -34,6 +34,6 @@ LABEL org.opencontainers.image.title="aethercode-exec-rs" \
 COPY --from=build /engine /usr/local/bin/engine
 USER 65532:65532
 # 5100 = HTTP gateway + SSE (/livez, /readyz, /api/v1/*).
-# Metrics are served on 127.0.0.1:${AC_DEBUG_PORT:-6060} only (loopback; not published).
+# Metrics, /livez and /readyz are served on ${AC_DEBUG_ADDR:-127.0.0.1}:${AC_DEBUG_PORT:-6060} (not published).
 EXPOSE 5100
 ENTRYPOINT ["/usr/local/bin/engine"]

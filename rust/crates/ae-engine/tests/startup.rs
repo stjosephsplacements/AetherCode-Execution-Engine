@@ -179,6 +179,72 @@ async fn metrics_only_on_loopback() {
     }
 }
 
+async fn debug_get(e: &common::Engine, path: &str) -> u16 {
+    reqwest::get(format!("http://127.0.0.1:{}{path}", e.debug_port))
+        .await
+        .unwrap()
+        .status()
+        .as_u16()
+}
+
+#[tokio::test]
+async fn worker_only_debug_listener_serves_probes_and_metrics_only() {
+    let infra = infra().await;
+    let judge = FakeJudge::start(&[]).await;
+    let e = spawn_engine(
+        &infra,
+        &EngineOpts {
+            args: &["--role", "worker"],
+            judge_url: &judge.url,
+            env: &[],
+        },
+    );
+    assert!(e.wait_log("engine ready", STARTUP).await);
+    assert_eq!(debug_get(&e, "/livez").await, 200);
+    assert_eq!(debug_get(&e, "/readyz").await, 200);
+    assert_eq!(debug_get(&e, "/metrics").await, 200);
+    for p in ["/debug/pprof/", "/api/v1/health", "/"] {
+        assert_eq!(debug_get(&e, p).await, 404, "{p}");
+    }
+}
+
+#[tokio::test]
+async fn debug_addr_is_configurable_and_non_loopback_warns() {
+    let infra = infra().await;
+    let judge = FakeJudge::start(&[]).await;
+    let e = spawn_engine(
+        &infra,
+        &EngineOpts {
+            args: &["--role", "worker"],
+            judge_url: &judge.url,
+            env: &[("AC_DEBUG_ADDR", "0.0.0.0")],
+        },
+    );
+    assert!(e.wait_log("engine ready", STARTUP).await);
+    assert!(e.has_log("exposed beyond loopback"));
+    assert!(e.has_log(&format!("0.0.0.0:{}", e.debug_port)));
+    assert_eq!(debug_get(&e, "/livez").await, 200);
+}
+
+#[tokio::test]
+async fn bad_debug_addr_is_a_startup_error() {
+    let infra = infra().await;
+    let judge = FakeJudge::start(&[]).await;
+    let mut e = spawn_engine(
+        &infra,
+        &EngineOpts {
+            args: &["--role", "worker"],
+            judge_url: &judge.url,
+            env: &[("AC_DEBUG_ADDR", "not-an-ip")],
+        },
+    );
+    let status = e
+        .wait_exit(Duration::from_secs(30))
+        .await
+        .expect("engine kept running with a bad AC_DEBUG_ADDR");
+    assert!(!status.success());
+}
+
 /// This host's primary non-loopback address (a UDP connect sends no packets).
 fn local_ip() -> Option<std::net::IpAddr> {
     let s = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
