@@ -49,7 +49,7 @@ go-judge sandbox (separate process / container)
 ### Queue (`internal/queue`)
 
 - **`DualConsumer`**: weighted fair queuing over two Redis Streams. Each worker goroutine tries `submitWeight` (default 3) messages from the submit stream before one from the run stream. When both are empty, it blocks for `AC_BLOCK_READ_TIMEOUT` (default 500 ms).
-- **Reclaimer**: every 30 seconds, `XAUTOCLAIM` re-claims messages idle for >30 seconds and reprocesses them. Messages exceeding `maxDeliveryCount=5` deliveries are dead-lettered (ACKed without processing) and counted in `ac_poison_messages_total`.
+- **Reclaimer**: after a random wait between 0 and 30 seconds (full jitter, re-drawn every cycle so nodes that restart together drift apart), `XAUTOCLAIM` re-claims messages idle for >30 seconds and reprocesses them. Messages exceeding `maxDeliveryCount=5` deliveries are dead-lettered (ACKed without processing) and counted in `ac_poison_messages_total`. Each claim is counted in `ac_reclaimer_claims_total` as `recovered` or `poison`.
 - **Legacy drain**: on startup, any messages remaining in the old single stream (`AC_STREAM_NAME`) are drained once and then the goroutine exits.
 - **PubSub**: Redis Pub/Sub + list-backed event log for SSE delivery. `PrepareAndEnqueue` pipelines test storage + QUEUED event + stream enqueue in one round trip.
 
@@ -91,6 +91,7 @@ All metrics are Prometheus counters/histograms exposed on `127.0.0.1:6060/metric
 | `ac_queue_depth` | Gauge | stream |
 | `ac_rate_limit_rejections_total` | Counter | type (user/ip) |
 | `ac_poison_messages_total` | Counter | — |
+| `ac_reclaimer_claims_total` | Counter | stream, result (recovered/poison) |
 
 ---
 

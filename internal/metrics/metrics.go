@@ -63,6 +63,12 @@ var (
 		Help:      "Messages dead-lettered after exceeding max delivery count.",
 	})
 
+	ReclaimerClaimsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "ac",
+		Name:      "reclaimer_claims_total",
+		Help:      "Stuck messages the reclaimer took over, by stream and result (recovered: reprocessed and acked; poison: dead-lettered).",
+	}, []string{"stream", "result"})
+
 	CompileCacheHitsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "ac",
 		Name:      "compile_cache_hits_total",
