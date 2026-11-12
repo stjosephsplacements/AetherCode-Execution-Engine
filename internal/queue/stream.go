@@ -168,10 +168,14 @@ func NewTieredConsumer(rdb *redis.Client, submitStream, runStream, bulkStream, g
 	}
 }
 
-func (dc *DualConsumer) ack(ctx context.Context, stream, msgID string) {
+// ack is best-effort: a failed ACK leaves the message in the PEL for the
+// reclaimer. It reports whether the message was actually removed from the
+// PEL, so callers that count outcomes can skip messages that will be retried.
+func (dc *DualConsumer) ack(ctx context.Context, stream, msgID string) bool {
 	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
-	dc.rdb.XAck(ackCtx, stream, dc.group, msgID) //nolint:errcheck // best-effort: ACK failure leaves msg in PEL for reclaimer
-	ackCancel()
+	defer ackCancel()
+	n, err := dc.rdb.XAck(ackCtx, stream, dc.group, msgID).Result()
+	return err == nil && n > 0
 }
 
 // streams returns the slice of configured stream names.
@@ -463,8 +467,9 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 						"stream", stream, "submission_id", subID, "msg_id", msg.ID, "err", dlqErr)
 					continue
 				}
-				dc.ack(ctx, stream, msg.ID)
-				metrics.ReclaimerClaimsTotal.WithLabelValues(stream, "poison").Inc()
+				if dc.ack(ctx, stream, msg.ID) {
+					metrics.ReclaimerClaimsTotal.WithLabelValues(stream, "poison").Inc()
+				}
 				continue
 			}
 
@@ -476,8 +481,9 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 				continue
 			}
 
-			dc.ack(ctx, stream, msg.ID)
-			metrics.ReclaimerClaimsTotal.WithLabelValues(stream, "recovered").Inc()
+			if dc.ack(ctx, stream, msg.ID) {
+				metrics.ReclaimerClaimsTotal.WithLabelValues(stream, "recovered").Inc()
+			}
 		}
 
 		if newCursor == "0-0" {
