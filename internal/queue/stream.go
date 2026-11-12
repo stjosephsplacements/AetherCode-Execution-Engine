@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,7 +133,9 @@ type DualConsumer struct {
 	submitWeight     int
 	bulkWeight       int
 	blockReadTimeout time.Duration
-	reclaimMinIdle   time.Duration // how long a message must be idle before reclaim; defaults to 30s
+	reclaimMinIdle   time.Duration  // how long a message must be idle before reclaim; defaults to 30s
+	reclaimInterval  time.Duration  // upper bound of the jittered wait between reclaim cycles; defaults to 30s
+	jitter           func() float64 // returns a value in [0, 1); tests swap it for a fixed sequence
 }
 
 func NewDualConsumer(rdb *redis.Client, submitStream, runStream, group string, submitWeight int, blockReadTimeout time.Duration) *DualConsumer {
@@ -160,6 +163,8 @@ func NewTieredConsumer(rdb *redis.Client, submitStream, runStream, bulkStream, g
 		bulkWeight:       bulkWeight,
 		blockReadTimeout: blockReadTimeout,
 		reclaimMinIdle:   30 * time.Second,
+		reclaimInterval:  30 * time.Second,
+		jitter:           rand.Float64, //nolint:gosec // G404: spreading timers needs no cryptographic randomness
 	}
 }
 
@@ -318,8 +323,10 @@ func (dc *DualConsumer) blockRead(ctx context.Context, consumer string, handler 
 }
 
 // StartReclaimer runs a background goroutine that reclaims stuck messages
-// from both streams every 30s using XAUTOCLAIM. Messages idle for > 30s
-// are re-processed through the handler.
+// from every stream using XAUTOCLAIM. Messages idle for > 30s are
+// re-processed through the handler. Each wait between cycles is drawn fresh
+// from [0, 30s) (full jitter), so nodes that start together do not keep
+// hitting Redis in lock-step.
 func (dc *DualConsumer) StartReclaimer(ctx context.Context, wg *sync.WaitGroup, handler func(ctx context.Context, submissionID string) error) {
 	wg.Add(1)
 	go func() {
@@ -333,7 +340,13 @@ func (dc *DualConsumer) StartReclaimer(ctx context.Context, wg *sync.WaitGroup, 
 			time.Sleep(time.Second)
 		}
 	}()
-	slog.Info("reclaimer started", "interval", "30s")
+	slog.Info("reclaimer started", "max_interval", dc.reclaimInterval, "jitter", "full")
+}
+
+// fullJitter returns a random wait in [0, base): the "full jitter" strategy.
+// r must return a value in [0, 1), like rand.Float64.
+func fullJitter(base time.Duration, r func() float64) time.Duration {
+	return time.Duration(r() * float64(base))
 }
 
 func (dc *DualConsumer) runReclaimer(ctx context.Context, handler func(ctx context.Context, submissionID string) error) (panicked bool) {
@@ -343,16 +356,20 @@ func (dc *DualConsumer) runReclaimer(ctx context.Context, handler func(ctx conte
 			panicked = true
 		}
 	}()
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
+	// A Ticker keeps a fixed phase forever, so reclaimers that start in the
+	// same instant stay synchronised. A Timer re-armed with a new random wait
+	// after every cycle breaks that phase lock.
+	timer := time.NewTimer(fullJitter(dc.reclaimInterval, dc.jitter))
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return false
-		case <-ticker.C:
+		case <-timer.C:
 			for _, stream := range dc.streams() {
 				dc.reclaimStream(ctx, stream, handler)
 			}
+			timer.Reset(fullJitter(dc.reclaimInterval, dc.jitter))
 		}
 	}
 }
@@ -447,6 +464,7 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 					continue
 				}
 				dc.ack(ctx, stream, msg.ID)
+				metrics.ReclaimerClaimsTotal.WithLabelValues(stream, "poison").Inc()
 				continue
 			}
 
@@ -459,6 +477,7 @@ func (dc *DualConsumer) reclaimStream(ctx context.Context, stream string, handle
 			}
 
 			dc.ack(ctx, stream, msg.ID)
+			metrics.ReclaimerClaimsTotal.WithLabelValues(stream, "recovered").Inc()
 		}
 
 		if newCursor == "0-0" {

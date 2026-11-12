@@ -9,6 +9,10 @@ and uses [semantic versioning](https://semver.org/).
 
 ### Added
 
+- **Reclaimer jitter** — the queue reclaimer now waits a random 0–30s between
+  cycles instead of a fixed 30s, so nodes that restart together no longer scan
+  Redis in lock-step. A new `ac_reclaimer_claims_total{stream, result}` counter
+  records each claimed message as `recovered` or `poison`.
 - **Richer results** — each test in the `VERDICT` event, the webhook and the
   stored results now carries `exit_status`, `sandbox_status` and `message`
   beside the existing CPU, wall-clock (`run_time_ns`) and memory figures.
