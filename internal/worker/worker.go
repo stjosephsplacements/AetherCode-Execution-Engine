@@ -595,7 +595,10 @@ func (w *Worker) runTestsBatched(ctx context.Context, jobID string, lang sandbox
 				testIndex := batchStart + i
 				tc := batch[i]
 				tr := judgeResult(r, testIndex, tc.ExpectedOutput, tc.CheckerType)
-				if tr.Verdict == model.VerdictAccepted && custom != nil {
+				// A custom checker owns acceptance: it runs for every test that completed normally, so it can
+				// accept output that is not byte-equal (floats, any-valid-answer problems). Limits and crashes
+				// keep their verdict; only Accepted and WrongAnswer come from a normal finish.
+				if (tr.Verdict == model.VerdictAccepted || tr.Verdict == model.VerdictWrongAnswer) && custom != nil {
 					// Run custom checker against input, expected, and actual stdout
 					cVerdict, _ := w.evaluateCustomChecker(ctx, custom, tc.Input, tc.ExpectedOutput, r.Files["stdout"])
 					tr.Verdict = cVerdict

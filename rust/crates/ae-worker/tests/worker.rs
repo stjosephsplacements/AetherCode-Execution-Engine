@@ -5,7 +5,7 @@ mod common;
 
 use ae_core::eventlog::EventType;
 use ae_core::model::{Status, Verdict};
-use ae_sandbox::{CopyIn, RunResult, STATUS_ACCEPTED};
+use ae_sandbox::{CopyIn, FileId, RunResult, STATUS_ACCEPTED};
 use common::{FakeSandbox, Harness, delivery, id};
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
@@ -116,6 +116,11 @@ async fn compile_error_keeps_diagnostics() {
     assert_eq!(d["compile_stderr"], "error[E0308]: mismatched types");
     assert_eq!(h.bus.acked(&j), 1);
     assert!(h.sb.runs().is_empty());
+    assert_eq!(
+        *h.sb.deleted.lock().unwrap(),
+        [FileId("partial-output".into())],
+        "output cached by a failed compile is removed"
+    );
 }
 
 #[tokio::test]
@@ -382,6 +387,28 @@ async fn custom_checker_runs_after_an_accepted_output() {
     let v: Vec<Verdict> = row.results.iter().map(|r| r.verdict).collect();
     assert_eq!(v, [Verdict::Accepted, Verdict::WrongAnswer]);
     assert_eq!(row.verdict, Some(Verdict::WrongAnswer));
+}
+
+#[tokio::test]
+async fn custom_checker_accepts_output_that_is_not_an_exact_match() {
+    let h = Harness::new().await;
+    let j = id(1);
+    // The program prints nothing, so the exact comparison against "42" fails.
+    h.job_with(&j, "python", "print(1)", &[("a", "42")], |s| {
+        s.set.checker_code = "import sys".into();
+        s.set.checker_language = "python".into();
+    });
+    h.sb.set_hook(|c| {
+        c.copy_in.get("/w/user_output.txt")?;
+        Some(RunResult {
+            status: STATUS_ACCEPTED.into(),
+            ..RunResult::default()
+        })
+    });
+    h.worker().process(delivery(&j)).await.unwrap();
+    let row = h.store.row(&j);
+    assert_eq!(row.results[0].verdict, Verdict::Accepted);
+    assert_eq!(row.verdict, Some(Verdict::Accepted));
 }
 
 #[tokio::test]

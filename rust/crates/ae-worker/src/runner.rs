@@ -306,7 +306,10 @@ async fn run_batch(spec: &RunSpec<'_>, from: usize, chunk: &[TestData]) -> Resul
     let mut results = Vec::with_capacity(chunk.len());
     for (i, (r, tc)) in out.iter().zip(chunk).enumerate() {
         let mut tr = judge_result(r, index(from + i), &tc.expected_output, spec.checker);
-        if tr.verdict == Verdict::Accepted
+        // A custom checker owns acceptance: it runs for every test that completed normally, so it
+        // can accept output that is not byte-equal (floats, any-valid-answer problems). Only
+        // Accepted/WrongAnswer come from a normal finish; limits and crashes keep their verdict.
+        if matches!(tr.verdict, Verdict::Accepted | Verdict::WrongAnswer)
             && let Some(c) = spec.custom
         {
             let stdout = r.files.get("stdout").map_or("", String::as_str);
