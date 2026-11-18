@@ -136,3 +136,30 @@ Shadow parity result (`compared/matched/diff/pending/ignored/unreadable/skipped_
 `cargo test -p ae-engine --test loadgen_smoke -- --nocapture` runs the real `engine` binary
 against Postgres, Redis and an in-process fake go-judge, only to prove `loadgen` works end
 to end. The sandbox is stubbed, so its latencies say nothing about the targets above.
+
+## Results: 2026-11-19, 200 students
+
+Run by `loadgen --students 200 --languages c,cpp,python --duration 3m --ramp 20s` (a 30-student, 40 s warm-up first), one
+engine at a time against the same go-judge, each with its own empty Postgres 18 and Redis 7 on the 256-core server.
+Go ran as the host binary with `AC_WORKER_COUNT=16`; Rust ran in its production image with `AC_WORKERS=16`.
+
+| | Go | Rust |
+|---|---|---|
+| Submissions completed / lost | 7322 / 0 | 7369 / 0 |
+| Error rate, verdict mismatch rate | 0, 0 | 0, 0 |
+| Throughput (jobs/s) | 38.5 | 39.2 |
+| Ingest (POST) p50 / p95 / p99 | 1.04 / 1.53 / 1.93 ms | 0.96 / 1.48 / 1.83 ms |
+| Verdict p50 / p95 / p99 (warm) | 2.56 / 5.87 / 8.14 s | 2.64 / 5.42 / 7.68 s |
+| Verdict mix | 6677 accepted, 273 CE, 67 RE, 183 TLE, 122 WA | 6717, 272, 66, 186, 128 |
+
+What this shows and does not show:
+
+- The two engines are indistinguishable at this load. Both were limited by the shared go-judge sandbox (about 39 jobs/s,
+  with several seconds of queueing for a verdict), not by the engine. A tool that is not the bottleneck cannot be faster.
+  Ingest is about 1 ms on both.
+- The verdict mix agrees within noise, which is what the parity run (21 of 21 identical verdicts) showed deterministically.
+- The only cold verdicts were 9 per run, so the cold-path comparison has no weight.
+- **Not measured**: 1000 or 5000 students, a go-judge with more parallelism, gVisor overhead (no `runsc` on the node), and
+  anything about memory or CPU of the engine itself. A fair test of the engines needs a go-judge that is not the limit.
+- The go-judge was the production cluster's, shared with a Playwright run at the same time, so absolute times carry that noise.
+  The two engines ran minutes apart under the same conditions.
