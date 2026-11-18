@@ -55,6 +55,13 @@ spec:
         - protocol: TCP
           port: 6379
 ---
+# WARNING: a NetworkPolicy that selects pods with policyTypes Ingress isolates them. This one is additive only when the
+# base (deploy/k8s) go-judge policy, which admits the Go engine, is applied. If nothing else selects go-judge, applying
+# this alone cuts the Go engine and everything behind it off from go-judge. Check `kubectl -n aethercode get netpol`
+# for go-judge-network-policy first; if it is absent, delete this policy instead of applying it.
+#
+# The egress rules above also assume Postgres and Redis run in this namespace. When they run elsewhere (for example the
+# `production` and `redis` namespaces) add a namespaceSelector egress rule for each, or the worker cannot start.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
