@@ -6,11 +6,11 @@ The Go engine is still authoritative. Nothing in this branch has been cut over.
 ## Verification gaps (not yet run)
 
 - [ ] Task 11 fix round 1 scoped re-review was interrupted by an API rate limit. Re-run it against `review-f5f20a2..57bb6fb.diff`.
-- [ ] Full workspace `cargo test` has not been run on the final head. Last green runs were per-crate.
+- [x] Full workspace `cargo test --workspace --all-targets` (359 tests) and `clippy -D warnings` green on 2026-11-19.
 - [ ] `cargo deny check` and `cargo audit` not run locally (`deny.toml` unverified). CI installs both.
 - [ ] Go tests not run against migration 008 (`webhook_delivered_at`). Go was not installed on the build host.
 - [ ] Probe argv for `go version`, `kotlinc -version`, `mcs --version`, `bun --version`, `sqlite3 --version` is untested against a real go-judge image.
-- [ ] Docker build of `rust/Dockerfile` ran on the build host. Compose and kustomize configs validated, not deployed.
+- [x] `rust/Dockerfile` builds on the server (2026-11-19). Compose and kustomize configs render; nothing deployed. Image is not pushed to a registry.
 - [ ] Load tests not run. The runbook `docs/benchmarks/rust-vs-go.md` is an owner-filled template. No numbers exist yet.
 
 ## Cutover (Task 12) — needs owner approval
@@ -24,11 +24,11 @@ The Go engine is still authoritative. Nothing in this branch has been cut over.
 
 ## Known defects / follow-ups
 
-- [ ] **Custom checker is broken in both engines.** It runs only after the exact check passes, so it can never accept non-exact output. Rust keeps parity with Go (`worker.go:597-602`). Fix both together.
+- [x] Custom checker fixed in both engines (2026-11-19): it runs for every test that completed normally. Rust has a test; the Go change has none yet.
 - [ ] Reaper re-enqueues stuck submissions without `expires_at`. No deadline column exists. Add one with an additive migration.
 - [ ] Cache TTL counts from creation, not last use. Confirm intent.
 - [ ] Compile cache size cap is an estimate (1 MiB per entry). Replace with real sizes if go-judge reports them.
-- [ ] A compiled binary produced after a compile timeout is never deleted (needs a go-judge TTL or sweep).
+- [ ] A compile that exceeds the clock limit while go-judge is still running leaves its binary (the id never reaches the engine). Outputs returned with a failed compile are now deleted; the timed-out case still needs a go-judge file listing sweep or a TTL.
 - [ ] SSRF blocklist lacks 6to4 (`2002::/16`), Teredo and IPv4 multicast `224/4`. Go has the same gaps.
 - [ ] IPv6 /64 rotation can give one client many rate-limit buckets. Key on the /64 prefix.
 - [ ] `RateLimitLayer` tower impl is dead code outside tests. Remove it.
@@ -67,3 +67,11 @@ See `.superpowers/sdd/2026-11-08-rust-engine/progress.md` (local). Summary:
 9. Custom checker parity kept with Go (bug, tracked above).
 10. Metrics bind address is configurable via `AC_DEBUG_ADDR`. Default stays loopback.
 11. Nginx sidecar removed. Overlays split into `rust-shadow` and `rust`.
+
+## Added 2026-11-19
+
+- [x] Admission counts the engine's own consumer-group lag plus pending entries, not `XLEN` (retained history). With `XLEN`, a full stream made every request 429 with an idle queue (it stalled the platform judge). Fixed in Rust and Go.
+- [x] Rust admission default is `2 * workers`; the `rust` overlay sets `AC_ADMISSION_MAX_QUEUE_DEPTH=64` (2 pods x 16 workers x 2). Raise it with the worker minimum.
+- [x] Opt-in `rust-gvisor` overlay and `docs/GVISOR.md`. Not verified: the node has no `runsc`, and go-judge runs privileged, which gVisor ignores. Test on one node first.
+- [ ] Shadow parity (`ae-shadowdiff`) was not run: it needs the shadow worker deployed beside the production Go engine and a read-only database role. Needs owner approval.
+- [ ] Go-vs-Rust throughput and gVisor overhead benchmark not run; the numbers in `docs/benchmarks/rust-vs-go.md` are still the owner's to fill.
