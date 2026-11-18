@@ -31,7 +31,14 @@ spec:
         - protocol: TCP
           port: 6060
   egress:
-    - to: []
+    # DNS only to the cluster resolver: `to: []` would allow port 53 to any address.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
@@ -92,7 +99,14 @@ spec:
         - protocol: TCP
           port: 6060
   egress:
-    - to: []
+    # DNS only to the cluster resolver: `to: []` would allow port 53 to any address.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
       ports:
         - protocol: UDP
           port: 53
