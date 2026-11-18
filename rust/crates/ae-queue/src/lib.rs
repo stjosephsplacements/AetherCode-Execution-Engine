@@ -102,15 +102,7 @@ impl Queue {
     /// # Errors
     /// Fails when Redis is unreachable or a group cannot be created.
     pub async fn connect(cfg: &Config, store: Arc<dyn ExpiryStore>) -> Result<Queue> {
-        let url = if cfg.redis_password.is_empty() {
-            format!("redis://{}/", cfg.redis_addr)
-        } else {
-            format!(
-                "redis://:{}@{}/",
-                percent_encode(&cfg.redis_password),
-                cfg.redis_addr
-            )
-        };
+        let url = cfg.redis_url();
         let client = redis::Client::open(url)?;
         let conn = client.get_connection_manager().await?;
         let host = std::env::var("HOSTNAME").unwrap_or_else(|_| "engine".to_owned());
@@ -216,23 +208,5 @@ pub(crate) fn now_ms() -> i64 {
         .map_or(0, |d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
 }
 
-fn percent_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            out.push(char::from(b));
-        } else {
-            out.push_str(&format!("%{b:02X}"));
-        }
-    }
-    out
-}
-
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn percent_encode_escapes_reserved() {
-        assert_eq!(super::percent_encode("a@b:c/d%"), "a%40b%3Ac%2Fd%25");
-        assert_eq!(super::percent_encode("Ab0-._~"), "Ab0-._~");
-    }
-}
+mod tests {}

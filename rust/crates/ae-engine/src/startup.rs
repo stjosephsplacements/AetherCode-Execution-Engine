@@ -39,22 +39,6 @@ pub fn judge_request_timeout(cfg: &Config) -> Duration {
     cfg.job_timeout + JUDGE_SLACK
 }
 
-/// `redis://` URL for `AC_REDIS_ADDR` with the percent-encoded password. Never log it.
-fn redis_url(cfg: &Config) -> String {
-    if cfg.redis_password.is_empty() {
-        return format!("redis://{}/", cfg.redis_addr);
-    }
-    let mut pw = String::new();
-    for b in cfg.redis_password.bytes() {
-        if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
-            pw.push(char::from(b));
-        } else {
-            pw.push_str(&format!("%{b:02X}"));
-        }
-    }
-    format!("redis://:{pw}@{}/", cfg.redis_addr)
-}
-
 /// First SIGTERM/SIGINT cancels `token`; a second one exits at once with status 1.
 fn spawn_signals(token: CancellationToken) -> Result<JoinHandle<()>, String> {
     use tokio::signal::unix::{SignalKind, signal};
@@ -231,7 +215,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
     }
 
     // Redis.
-    let client = redis::Client::open(redis_url(&cfg)).map_err(|e| format!("redis client: {e}"))?;
+    let client = redis::Client::open(cfg.redis_url()).map_err(|e| format!("redis client: {e}"))?;
     let Some(redis) = or_stop(&token, client.get_connection_manager()).await else {
         return interrupted();
     };
@@ -441,19 +425,6 @@ async fn finished(slot: &mut Option<JoinHandle<Result<(), String>>>) -> String {
 mod tests {
     use super::*;
     use std::collections::HashMap;
-
-    #[test]
-    fn redis_url_encodes_password() {
-        let m: HashMap<String, String> = [
-            ("AC_REDIS_ADDR".to_owned(), "h:1".to_owned()),
-            ("AC_REDIS_PASSWORD".to_owned(), "p@ss:w/rd".to_owned()),
-        ]
-        .into();
-        let cfg = Config::from_map(&m).unwrap();
-        assert_eq!(redis_url(&cfg), "redis://:p%40ss%3Aw%2Frd@h:1/");
-        let cfg = Config::from_map(&HashMap::new()).unwrap();
-        assert_eq!(redis_url(&cfg), "redis://127.0.0.1:6379/");
-    }
 
     #[test]
     fn judge_timeout_follows_job_timeout() {

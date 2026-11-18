@@ -10,6 +10,9 @@ pub struct Config {
     pub database_url: String,
     pub redis_addr: String,
     pub redis_password: String,
+    /// `AC_REDIS_DB`: the logical Redis database. The Go engine honours it; ignoring it put the Rust engine on
+    /// database 0 beside a Go engine on database 1, with empty streams and an unused consumer group.
+    pub redis_db: u32,
     pub judge_url: String,
     pub judge_token: String,
     pub worker_count: usize,
@@ -88,6 +91,7 @@ impl Config {
             ),
             redis_addr: s("AC_REDIS_ADDR", "127.0.0.1:6379"),
             redis_password: s("AC_REDIS_PASSWORD", ""),
+            redis_db: num(m, "AC_REDIS_DB", 0)?,
             judge_url: s("AC_JUDGE_URL", "http://127.0.0.1:5050"),
             judge_token: s("AC_JUDGE_TOKEN", ""),
             worker_count: num(m, "AC_WORKER_COUNT", 8)?,
@@ -166,6 +170,22 @@ impl Config {
         }
         let cores = std::thread::available_parallelism().map_or(1, usize::from);
         (cores / 4).max(1)
+    }
+
+    /// `redis://` URL for `AC_REDIS_ADDR` and `AC_REDIS_DB`, with the password percent-encoded. Never log it.
+    pub fn redis_url(&self) -> String {
+        if self.redis_password.is_empty() {
+            return format!("redis://{}/{}", self.redis_addr, self.redis_db);
+        }
+        let mut pw = String::new();
+        for b in self.redis_password.bytes() {
+            if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~') {
+                pw.push(char::from(b));
+            } else {
+                pw.push_str(&format!("%{b:02X}"));
+            }
+        }
+        format!("redis://:{pw}@{}/{}", self.redis_addr, self.redis_db)
     }
 
     /// Admission queue depth limit, or `effective_workers() * 2` when configured as 0: past two
@@ -265,6 +285,7 @@ impl std::fmt::Debug for Config {
             .field("database_url", &r)
             .field("redis_addr", &self.redis_addr)
             .field("redis_password", &r)
+            .field("redis_db", &self.redis_db)
             .field("judge_url", &self.judge_url)
             .field("judge_token", &r)
             .field(
@@ -391,6 +412,24 @@ mod tests {
         assert_eq!(c.effective_workers(), (cores / 4).max(1));
         let c = Config::from_map(&map(&[("AC_WORKERS", "6")])).unwrap();
         assert_eq!(c.effective_workers(), 6);
+    }
+
+    #[test]
+    fn redis_url_has_the_database_and_an_encoded_password() {
+        let m = map(&[
+            ("AC_REDIS_ADDR", "h:1"),
+            ("AC_REDIS_PASSWORD", "p@ss:w/rd"),
+            ("AC_REDIS_DB", "1"),
+        ]);
+        assert_eq!(
+            Config::from_map(&m).unwrap().redis_url(),
+            "redis://:p%40ss%3Aw%2Frd@h:1/1"
+        );
+        assert_eq!(
+            Config::from_map(&map(&[])).unwrap().redis_url(),
+            "redis://127.0.0.1:6379/0"
+        );
+        assert!(Config::from_map(&map(&[("AC_REDIS_DB", "x")])).is_err());
     }
 
     #[test]
