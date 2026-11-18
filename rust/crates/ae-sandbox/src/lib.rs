@@ -81,10 +81,6 @@ fn is_zero(v: &u64) -> bool {
     *v == 0
 }
 
-fn is_none_or_zero(v: &Option<u64>) -> bool {
-    v.is_none_or(|v| v == 0)
-}
-
 /// An entry of `Cmd.files`: stdin content, or a named output collector with a size cap.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CmdFile {
@@ -92,8 +88,9 @@ pub struct CmdFile {
     pub content: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
-    /// `None` and `Some(0)` are both omitted, like Go's `omitempty`.
-    #[serde(default, skip_serializing_if = "is_none_or_zero")]
+    /// Only `None` is omitted. Go sends `"max": 0` for a collector (a non-nil pointer survives
+    /// `omitempty`), and go-judge rejects a named collector without `max` as an invalid file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<u64>,
 }
 

@@ -290,9 +290,9 @@ fn non_http_judge_url_is_a_config_error() {
 }
 
 #[test]
-fn zero_collector_max_is_omitted_like_go() {
+fn zero_collector_max_is_sent_like_go() {
     let v = serde_json::to_value(CmdFile::collector("stdout", 0)).unwrap();
-    assert_eq!(v, serde_json::json!({"name": "stdout"}));
+    assert_eq!(v, serde_json::json!({"name": "stdout", "max": 0}));
     let v = serde_json::to_value(CmdFile::collector("stdout", 5)).unwrap();
     assert_eq!(v, serde_json::json!({"name": "stdout", "max": 5}));
 }
