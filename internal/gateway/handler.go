@@ -441,7 +441,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Admission control — reject if queue is too deep
-	admitted, err := ratelimit.AdmissionCheck(ctx, h.rdb, targetStream.StreamName(), h.admissionMaxQueueDepth)
+	admitted, err := ratelimit.AdmissionCheck(ctx, h.rdb, targetStream.StreamName(), targetStream.GroupName(), h.admissionMaxQueueDepth)
 	if err != nil {
 		slog.Error("admission check failed, allowing", "err", err)
 	} else if !admitted {

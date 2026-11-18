@@ -408,6 +408,35 @@ async fn depth_and_oldest_age() {
     );
 }
 
+#[tokio::test]
+async fn depth_counts_waiting_and_in_flight_jobs_not_acked_history() {
+    let mut e = env().await;
+    go_enqueue(&mut e.rdb, RUN, "a").await;
+    go_enqueue(&mut e.rdb, RUN, "b").await;
+    assert_eq!(e.q.depth(RUN).await.unwrap(), 2, "two waiting");
+    let mut delivered = e.q.read_batch().await.unwrap();
+    while delivered.len() < 2 {
+        delivered.extend(e.q.read_batch().await.unwrap());
+    }
+    assert_eq!(
+        e.q.depth(RUN).await.unwrap(),
+        2,
+        "delivered but unacked is in flight"
+    );
+    e.q.ack_many(&delivered).await.unwrap();
+    let len: u64 = redis::cmd("XLEN")
+        .arg(RUN)
+        .query_async(&mut e.rdb)
+        .await
+        .unwrap();
+    assert_eq!(len, 2, "acked entries stay in the stream");
+    assert_eq!(
+        e.q.depth(RUN).await.unwrap(),
+        0,
+        "an idle queue is not full"
+    );
+}
+
 fn dummy() -> Delivery {
     Delivery {
         stream: "x".into(),

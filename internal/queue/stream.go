@@ -33,6 +33,9 @@ func NewStream(rdb *redis.Client, stream, group string) *Stream {
 // StreamName returns the Redis stream key.
 func (s *Stream) StreamName() string { return s.stream }
 
+// GroupName is the consumer group this engine reads the stream with.
+func (s *Stream) GroupName() string { return s.group }
+
 func (s *Stream) ack(ctx context.Context, msgID string) {
 	ackCtx, ackCancel := context.WithTimeout(context.WithoutCancel(ctx), 3*time.Second)
 	s.rdb.XAck(ackCtx, s.stream, s.group, msgID) //nolint:errcheck // best-effort: ACK failure leaves msg in PEL for reclaimer

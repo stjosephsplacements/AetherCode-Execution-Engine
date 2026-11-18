@@ -32,7 +32,7 @@ pub struct Config {
     pub rate_limit_burst: u32,
     pub rate_limit_unauth_per_minute: u32,
     pub rate_limit_unauth_burst: u32,
-    /// 0 means `effective_workers() * 4`, see [`Config::max_queue_depth`].
+    /// 0 means `effective_workers() * 2`, see [`Config::max_queue_depth`].
     pub admission_max_queue_depth: usize,
 
     pub cors_allowed_origins: String,
@@ -168,12 +168,13 @@ impl Config {
         (cores / 4).max(1)
     }
 
-    /// Admission queue depth limit, or `effective_workers() * 4` when configured as 0.
+    /// Admission queue depth limit, or `effective_workers() * 2` when configured as 0: past two
+    /// queued jobs per worker a burst only adds latency, so it is shed with `Retry-After`.
     pub fn max_queue_depth(&self) -> usize {
         if self.admission_max_queue_depth > 0 {
             self.admission_max_queue_depth
         } else {
-            self.effective_workers() * 4
+            self.effective_workers() * 2
         }
     }
 }
@@ -393,13 +394,13 @@ mod tests {
     }
 
     #[test]
-    fn auto_queue_depth_is_four_times_workers() {
+    fn auto_queue_depth_is_twice_the_workers() {
         let c = Config::from_map(&map(&[
             ("AC_WORKERS", "3"),
             ("AC_ADMISSION_MAX_QUEUE_DEPTH", "0"),
         ]))
         .unwrap();
-        assert_eq!(c.max_queue_depth(), 12);
+        assert_eq!(c.max_queue_depth(), 6);
         let c = Config::from_map(&map(&[("AC_WORKERS", "3")])).unwrap();
         assert_eq!(c.max_queue_depth(), 5000);
     }

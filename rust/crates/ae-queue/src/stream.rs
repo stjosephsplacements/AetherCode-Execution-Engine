@@ -1,5 +1,5 @@
 use crate::{Queue, Result, now_ms};
-use redis::streams::StreamRangeReply;
+use redis::streams::{StreamInfoGroupsReply, StreamRangeReply};
 use std::time::Duration;
 
 /// Approximate `MAXLEN` of every submission stream (Go: 100,000).
@@ -44,14 +44,30 @@ impl Queue {
         Ok(())
     }
 
-    /// `XLEN` of a stream (0 when it does not exist).
+    /// Jobs waiting or in flight on a stream: the group's undelivered `lag` plus its pending
+    /// (delivered, unacknowledged) entries. `XLEN` is only the retained history, because acked
+    /// entries stay until `MAXLEN` trims them; admitting on it sheds every request once the stream
+    /// has filled, with an idle queue. Falls back to `XLEN` when the group or its `lag` is unknown
+    /// (no group yet, or Redis could not compute it after a deletion), which over-counts at worst.
     ///
     /// # Errors
     /// Fails on a Redis error.
     pub async fn depth(&self, stream: &str) -> Result<u64> {
+        let mut conn = self.conn.clone();
+        let groups: redis::RedisResult<StreamInfoGroupsReply> = redis::cmd("XINFO")
+            .arg("GROUPS")
+            .arg(stream)
+            .query_async(&mut conn)
+            .await;
+        if let Ok(reply) = groups
+            && let Some(g) = reply.groups.iter().find(|g| g.name == self.group)
+            && let Some(lag) = g.lag
+        {
+            return Ok(lag as u64 + g.pending as u64);
+        }
         Ok(redis::cmd("XLEN")
             .arg(stream)
-            .query_async(&mut self.conn.clone())
+            .query_async(&mut conn)
             .await?)
     }
 
