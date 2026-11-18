@@ -140,6 +140,8 @@ impl Sandbox for FakeSandbox {
                     r.status = STATUS_NONZERO_EXIT.into();
                     r.exit_status = 1;
                     r.files.insert("stderr".into(), stderr);
+                    // go-judge may still hand back a partial output it cached.
+                    r.file_ids.insert(bin.clone(), "partial-output".into());
                 }
                 None => {
                     let n = self.next_id.fetch_add(1, Ordering::SeqCst);

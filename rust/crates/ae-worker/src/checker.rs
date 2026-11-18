@@ -166,6 +166,13 @@ async fn run_compile(
         .next()
         .ok_or_else(|| Error::Other("compile: empty response".into()))?;
     if r.status != STATUS_ACCEPTED {
+        // A failed or timed-out compile can still leave cached outputs in go-judge; nothing will
+        // ever reference them, so remove them now instead of letting them fill its file store.
+        for id in r.file_ids.values() {
+            if let Err(e) = sandbox.delete_file(FileId(id.clone())).await {
+                tracing::warn!(file_id = %id, error = %e, "compile: delete leftover file");
+            }
+        }
         return Err(Error::Compile(
             r.files.get("stderr").cloned().unwrap_or_default(),
         ));
