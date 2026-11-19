@@ -67,6 +67,20 @@ func TestAdmissionCheckCountsUndeliveredAndInFlightJobs(t *testing.T) {
 	}
 }
 
+// TestAdmissionCheckFailsOpenWhenXInfoFails: an XINFO error is returned with the check admitting,
+// instead of falling back to XLEN and rejecting on history the group has already acknowledged.
+func TestAdmissionCheckFailsOpenWhenXInfoFails(t *testing.T) {
+	rdb := newMiniredis(t)
+	ctx := context.Background()
+	stream := "ac:submissions:run"
+	if err := rdb.Set(ctx, stream, "not a stream", 0).Err(); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers", 1); err == nil || !ok {
+		t.Fatalf("a failed XINFO should admit and return the error, ok=%v err=%v", ok, err)
+	}
+}
+
 // TestCheckFirstRequestAllowed is a smoke test that the limiter constructs and
 // the sliding-window Lua script runs without error.
 func TestCheckFirstRequestAllowed(t *testing.T) {

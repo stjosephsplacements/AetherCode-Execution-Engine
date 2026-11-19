@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -120,26 +121,31 @@ func (l *Limiter) calcRetryAfter(ctx context.Context, key string, nowMs, windowM
 
 // AdmissionCheck returns true if the queue depth is within the admission threshold.
 func AdmissionCheck(ctx context.Context, rdb *redis.Client, streamName, group string, maxDepth int) (bool, error) {
-	depth, err := queueDepth(ctx, rdb, streamName, group)
+	depth, err := QueueDepth(ctx, rdb, streamName, group)
 	if err != nil {
 		return true, err // fail open
 	}
 	return depth < int64(maxDepth), nil
 }
 
-// queueDepth counts jobs waiting or in flight for this engine's consumer group: its undelivered lag
+// QueueDepth counts jobs waiting or in flight for this engine's consumer group: its undelivered lag
 // plus its pending (delivered, unacknowledged) entries. XLEN is only the retained history, because
 // acknowledged entries stay in the stream until MAXLEN trims them, so admitting on it rejects every
 // request once the stream has filled even though the queue is idle. Only the engine's own group
 // counts: a shadow engine reading the same stream through another group must not throttle it. A
-// stream without that group falls back to XLEN.
-func queueDepth(ctx context.Context, rdb *redis.Client, streamName, group string) (int64, error) {
+// stream without that group falls back to XLEN; a failed XINFO is returned, not papered over with
+// XLEN, so callers fail open instead of rejecting on the history length.
+func QueueDepth(ctx context.Context, rdb *redis.Client, streamName, group string) (int64, error) {
 	groups, err := rdb.XInfoGroups(ctx, streamName).Result()
-	if err == nil {
-		for _, g := range groups {
-			if g.Name == group {
-				return g.Lag + g.Pending, nil
-			}
+	if err != nil {
+		if strings.Contains(err.Error(), "no such key") {
+			return 0, nil // no stream yet, nothing queued
+		}
+		return 0, err
+	}
+	for _, g := range groups {
+		if g.Name == group {
+			return g.Lag + g.Pending, nil
 		}
 	}
 	return rdb.XLen(ctx, streamName).Result()

@@ -734,7 +734,7 @@ func TestBusyRetryAfterFollowsTheDrainRate(t *testing.T) {
 
 	now := time.Unix(5000, 0)
 	metrics.JobsDrain = metrics.NewDrain(func() time.Time { return now })
-	if got := h.busyRetryAfter(ctx, "ac:submissions:run"); got != 10 {
+	if got := h.busyRetryAfter(ctx, h.runStream); got != 10 {
 		t.Fatalf("Retry-After with no measured rate = %d, want the old fixed 10", got)
 	}
 
@@ -742,7 +742,7 @@ func TestBusyRetryAfterFollowsTheDrainRate(t *testing.T) {
 		metrics.JobsDrain.Complete()
 	}
 	now = now.Add(time.Second) // the rate settles at about 60 jobs/s (alpha 0.3)
-	got := h.busyRetryAfter(ctx, "ac:submissions:run")
+	got := h.busyRetryAfter(ctx, h.runStream)
 	// 70 queued, limit 10: it must fall by 61 jobs, about a second at 60/s.
 	if got < 1 || got > 3 {
 		t.Fatalf("Retry-After = %d, want 1 to 3 seconds for a 61-job excess at about 60 jobs/s", got)
