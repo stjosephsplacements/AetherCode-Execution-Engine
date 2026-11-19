@@ -1,0 +1,42 @@
+[Unit]
+Description=AetherCode Execution Engine (Rust)
+After=network.target redis-server.service postgresql.service
+Requires=redis-server.service
+
+[Service]
+Type=simple
+User=aethercode-exec
+Group=aethercode-exec
+WorkingDirectory=/opt/aethercode-exec-rs
+# Add --role gateway|worker (or --role worker --shadow) to split roles; AC_ROLE sets the default.
+ExecStart=/opt/aethercode-exec-rs/engine
+Restart=on-failure
+RestartSec=5
+
+EnvironmentFile=/etc/aethercode-exec-rs/env
+
+LimitNOFILE=65536
+# SIGTERM starts a drain of up to 120 s for in-flight jobs; the engine exits 0 afterwards.
+KillMode=mixed
+TimeoutStopSec=150
+
+# Hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+MemoryDenyWriteExecute=true
+LockPersonality=true
+ReadWritePaths=/opt/aethercode-exec-rs
+
+[Install]
+WantedBy=multi-user.target

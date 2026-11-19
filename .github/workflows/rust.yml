@@ -1,0 +1,79 @@
+name: Rust
+
+on:
+  push:
+    branches:
+      - development
+      - production
+      - "feature/**"
+      - "feat/**"
+      - "fix/**"
+    paths:
+      - "rust/**"
+      - "migrations/**"
+      - ".dockerignore"
+      - ".github/workflows/rust.yml"
+  pull_request:
+    paths:
+      - "rust/**"
+      - "migrations/**"
+      - ".dockerignore"
+      - ".github/workflows/rust.yml"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Set up Rust
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            rust/target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust/rust-toolchain.toml', 'rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+          restore-keys: cargo-${{ runner.os }}-
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Install cargo-deny and cargo-audit
+        run: cargo install --locked cargo-deny cargo-audit
+
+      - name: Licenses and advisories
+        run: cargo deny check
+
+      - name: Audit
+        run: cargo audit
+
+  # Build only: the Rust image is deliberately not pushed or released yet (see release.yml).
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: docker build -f rust/Dockerfile --build-arg COMMIT_SHA="${GITHUB_SHA}" -t aethercode-exec-rs:ci .
+
+      - name: Smoke test
+        run: docker run --rm aethercode-exec-rs:ci --help

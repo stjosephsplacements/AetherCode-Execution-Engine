@@ -1,0 +1,21 @@
+# Rust engine with go-judge (the pods that run untrusted student code) inside gVisor.
+#
+#   kubectl apply -k deploy/k8s-overlays/rust-gvisor/
+#
+# Prerequisites (docs/GVISOR.md): runsc installed on every node that runs go-judge and registered as
+# containerd runtime handler `runsc`. Verify go-judge under runsc with the checklist there BEFORE
+# applying: go-judge needs mount namespaces and cgroup v2 writes, and gVisor ignores
+# `privileged: true`, so this overlay is opt-in and not part of the default `rust` overlay.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - ../rust
+  - runtimeclass.yaml
+
+patches:
+  - target: {kind: DaemonSet, name: go-judge}
+    patch: |-
+      - op: add
+        path: /spec/template/spec/runtimeClassName
+        value: gvisor

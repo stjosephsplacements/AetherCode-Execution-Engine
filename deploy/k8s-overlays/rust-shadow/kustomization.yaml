@@ -1,0 +1,33 @@
+# SHADOW-ONLY overlay: one compare-only Rust worker. Safe to apply while the Go engine
+# serves traffic: it does not touch any Go resource, takes no jobs from the Go consumer
+# group (it reads through <AC_CONSUMER_GROUP>-rust), writes nothing to Postgres, and has
+# no Service. Verdicts land in Redis as ac:shadow:<job_id> for ae-shadowdiff.
+#
+# Standalone: it expects the base (deploy/k8s) to be applied already (namespace,
+# aethercode-exec-config, go-judge, Postgres, Redis).
+#
+#   cp deploy/k8s-overlays/rust-shadow/.env.shadow.example deploy/k8s-overlays/rust-shadow/.env.shadow   # fill in
+#   kustomize edit set image ghcr.io/stjosephsplacements/aethercode-exec-rs=ghcr.io/<owner>/aethercode-exec-rs:<tag>
+#   kubectl apply -k deploy/k8s-overlays/rust-shadow/
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aethercode
+
+resources:
+  - configmap.yaml
+  - shadow-worker.yaml
+  - networkpolicy.yaml
+
+# Secret `aethercode-exec-shadow`. AC_DATABASE_URL must be a READ-ONLY role, never the
+# owner DSN (SQL in docs/ARCHITECTURE.md, "Shadow database role"). .env.shadow is gitignored.
+secretGenerator:
+  - name: aethercode-exec-shadow
+    envs:
+      - .env.shadow
+generatorOptions:
+  disableNameSuffixHash: true
+
+images:
+  - name: ghcr.io/stjosephsplacements/aethercode-exec-rs
+    newTag: SET_ME

@@ -156,3 +156,80 @@ See `deploy/k8s/` for manifests. Workers are stateless — scale the Deployment 
 - **Auth**: OIDC JWT (Zitadel). JWT auth is optional. When a valid token is presented, the engine enforces tenant and user ownership of jobs. Unauthenticated callers receive a `stream_token` with each job, which gates both SSE streaming and cancel.
 - **Rate limiting**: per-user sliding window (`AC_RATE_LIMIT_PER_MINUTE`) + optional per-IP window for unauthenticated callers. Admission control caps the Redis queue depth.
 - **Input validation**: source code ≤ 64 KB, body ≤ 64 MB, test data ≤ 8 MB per case, idempotency key ≤ 255 bytes.
+
+---
+
+## Rust engine
+
+A drop-in rewrite of the Go engine in `rust/` (binary `engine`, crate `ae-engine`), built from `rust/Dockerfile`. It keeps the HTTP API, Redis stream layout, Postgres schema (same embedded migrations) and Prometheus metric names of the Go engine, and runs beside it through shadow and cutover.
+
+### Components
+
+| Crate | Role |
+|-------|------|
+| `ae-core` | Config, models, judge/output normalisation, event log |
+| `ae-gateway` | Axum router, auth (OIDC), rate limit, admission, SSE, metrics |
+| `ae-queue` | Redis Streams, weighted consumer, reclaimer, poison dead-lettering |
+| `ae-db` | Postgres access and advisory-locked embedded migrations |
+| `ae-sandbox` | go-judge client |
+| `ae-worker` | Compile cache, scheduler budget, batched test execution |
+| `ae-engine` | Startup, supervision, roles, shadow mode, graceful drain |
+| `ae-loadgen`, `ae-shadowdiff` | Load generator and shadow-vs-Go verdict comparison |
+
+### Roles
+
+`--role all|gateway|worker` (default `AC_ROLE`, `all`). `gateway` serves HTTP and enqueues; `worker` consumes and runs jobs and serves **no public HTTP**. In Kubernetes they are separate Deployments (`deploy/k8s-overlays/`).
+
+### Shadow mode
+
+`--role worker --shadow` reads the Go engine's streams through its own consumer group (`<AC_CONSUMER_GROUP>-rust`), runs the real worker, but writes nothing to Postgres, emits no events or webhooks, and stores its verdict in `ac:shadow:<job_id>` (1 h TTL; dead letters go to `ac:dlq:poison:rust`). `ae-shadowdiff` compares those records with the Go rows. Migrations stay with the authoritative engine. Compose: `--profile rust-shadow`.
+
+#### Shadow database role
+
+The shadow worker only reads `submissions`, so it must not hold the owner DSN. Create a read-only role and put its DSN in the Secret `aethercode-exec-shadow` (key `AC_DATABASE_URL`, generated from `deploy/k8s-overlays/rust-shadow/.env.shadow`); in compose set `AC_SHADOW_DATABASE_URL`:
+
+```sql
+CREATE ROLE aethercode_shadow LOGIN PASSWORD 'CHANGE_ME' NOSUPERUSER NOCREATEDB NOCREATEROLE;
+GRANT CONNECT ON DATABASE aethercode_exec TO aethercode_shadow;
+GRANT USAGE ON SCHEMA public TO aethercode_shadow;
+GRANT SELECT ON submissions, schema_version TO aethercode_shadow;
+ALTER ROLE aethercode_shadow SET default_transaction_read_only = on;
+-- With row-level security enforced on submissions, add BYPASSRLS or a SELECT policy for this role.
+```
+
+### Admission and 429 semantics
+
+`POST /api/v1/execute` answers `429` with `Retry-After` when the queue is at capacity (`AC_ADMISSION_MAX_QUEUE_DEPTH`; 0 = 2 x workers; the count includes jobs in flight), the per-user or per-IP rate limit is hit, or the ingest concurrency limit is exhausted. `Retry-After` follows the measured job drain rate. `503` + `Retry-After: 5` means the engine is not ready (starting up or draining); nothing is enqueued.
+
+### Readiness and drain
+
+`/livez` is up as soon as the listener is bound; `/readyz` is 503 until startup (DB, Redis, sandbox and language self-tests, pre-warm) finishes. On SIGTERM/SIGINT: `/readyz` goes 503 and `execute` returns 503, workers stop reading and get up to 120 s for in-flight jobs, the HTTP server keeps serving all other routes (results, SSE, health) until the drain ends, telemetry is flushed, exit 0. A second signal exits 1. Use `terminationGracePeriodSeconds >= 150` for workers; no `preStop` is needed there. A gateway-only pod has nothing to drain and closes its listener at once, so give it a short `preStop` sleep (the Kubernetes overlay uses 10 s) to cover endpoint propagation.
+
+### Metrics and probes
+
+A separate debug listener binds `AC_DEBUG_ADDR:AC_DEBUG_PORT` (default `127.0.0.1:6060`) and serves exactly `/metrics`, `/livez` (200 while the process is up) and `/readyz` (mirrors readiness; 503 until startup finishes and while draining). Worker-only pods serve no public HTTP, so they are probed here; gateway pods are probed on 5100. The listener stays up for the whole 120 s drain and closes last. Any non-loopback `AC_DEBUG_ADDR` logs a warning: it exposes these routes to the network and must be restricted by a NetworkPolicy or firewall. Compose and systemd keep the loopback default; the Kubernetes overlays set `AC_DEBUG_ADDR=0.0.0.0` and admit port 6060 only from the Prometheus pods (namespace label `kubernetes.io/metadata.name=monitoring`, pod label `app.kubernetes.io/name=prometheus`; edit `networkpolicy.yaml` to match your installation). Pod annotations point Prometheus at 6060.
+
+Metrics: all in the table above plus `ac_stage_duration_seconds{stage}`, `ac_queue_age_seconds{stream}` (age of the oldest entry; the autoscaling signal), `ac_compile_cache_hits_total` (misses = `ac_compile_duration_seconds_count`, observed only on a compile-cache miss) and `ac_scheduler_budget_used{resource}`. Alert rules: `deploy/monitoring/alerts.yml` (group `aethercode-exec-rs`).
+
+### Autoscaling
+
+The worker HPA targets the external metric `ac_queue_age_seconds_max` (target 10 s). It has no label selector (stream names contain `:`, which is not a valid selector value); the stream filter lives in the Prometheus Adapter rule (`metricsQuery: max(ac_queue_age_seconds{stream=~"ac:submissions:(submit|run)"})`) or in a KEDA `ScaledObject` Prometheus trigger. Both snippets are in `deploy/k8s-overlays/rust/hpa.yaml`. The gateway HPA uses CPU.
+
+### Configuration
+
+Same `AC_*` variables as the Go engine (database, Redis, go-judge, OIDC, streams, rate limits) plus:
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `AC_ROLE` | `all` | `all`, `gateway` or `worker` |
+| `AC_WORKERS` | `0` | Worker concurrency budget; 0 = a quarter of the cores |
+| `AC_COMPILE_CACHE_MAX_MB` | `1024` | Compile cache size cap |
+| `AC_PREWARM` | `16` | Sandbox slots warmed before readiness |
+| `AC_OTLP_ENDPOINT` | empty | OTLP/HTTP trace endpoint; empty disables export |
+| `AC_DEBUG_PORT` | `6060` | Metrics and probe listener port |
+| `AC_DEBUG_ADDR` | `127.0.0.1` | Address the metrics and probe listener binds; non-loopback logs a warning |
+| `AC_LANGUAGES_FILE` | empty | TOML language table replacing the built-in one |
+
+### Deployment assets
+
+`rust/Dockerfile` (distroless, uid 65532, no shell), `docker-compose.yml` (profiles `rust`, `rust-shadow`), `deploy/k8s-overlays/rust-shadow/` (only the compare-only worker, safe beside live Go traffic) and `deploy/k8s-overlays/rust/` (gateway and worker Deployments, HPA, PDB, NetworkPolicy; applying it is a real cutover because the workers share the Go consumer group), `deploy/systemd/aethercode-exec-rs.service` with `env-rs.example`.

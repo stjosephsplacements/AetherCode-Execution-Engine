@@ -118,3 +118,76 @@ groups:
             Expected when every job carries different source. If one source is
             sent as many jobs (one per test), check that the caller is not
             defeating the compile cache.
+
+  # Rust engine (rust/Dockerfile). Scrape it as job "aethercode-exec-rs": in Kubernetes
+  # port 6060 of every pod (AC_DEBUG_ADDR=0.0.0.0, annotations in deploy/k8s-overlays).
+  - name: aethercode-exec-rs
+    rules:
+      - alert: RustEngineDown
+        expr: up{job="aethercode-exec-rs"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rust engine pod {{ $labels.instance }} cannot be scraped"
+          description: >
+            The metrics sidecar or the engine behind it is not answering. Check
+            the pod, its logs and /readyz.
+
+      # `up == 0` has no series once Kubernetes removes every scrape target, so also alert on the
+      # deployments themselves (needs kube-state-metrics). Silent where no Rust deployment exists.
+      - alert: RustEngineNoAvailablePods
+        expr: >
+          kube_deployment_spec_replicas{deployment=~"aethercode-exec-rs-(gateway|worker)"} > 0
+          and on (namespace, deployment)
+          kube_deployment_status_replicas_available{deployment=~"aethercode-exec-rs-(gateway|worker)"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rust engine deployment {{ $labels.deployment }} has no available pods"
+          description: >
+            The deployment wants replicas but none is available, so there are also no
+            scrape targets for RustEngineDown to see. Check the rollout and pod events.
+
+      # The oldest waiting entry's age is the autoscaling signal (HPA target is 10s); this
+      # fires when scaling cannot keep up.
+      - alert: RustQueueAgeHigh
+        expr: max by (stream) (ac_queue_age_seconds{job="aethercode-exec-rs"}) > 30
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Oldest entry in {{ $labels.stream }} has waited {{ $value }}s"
+          description: >
+            Workers are not draining the stream fast enough. Check the worker
+            HPA (maxReplicas reached?), go-judge capacity and the scheduler
+            budget.
+
+      # Misses are the compile-duration histogram count (it is only observed on a miss).
+      - alert: RustCompileCacheHitRatioLow
+        expr: >
+          sum(rate(ac_compile_cache_hits_total{job="aethercode-exec-rs"}[30m]))
+          / (sum(rate(ac_compile_cache_hits_total{job="aethercode-exec-rs"}[30m]))
+             + sum(rate(ac_compile_duration_seconds_count{job="aethercode-exec-rs"}[30m]))) < 0.1
+          and sum(rate(ac_compile_duration_seconds_count{job="aethercode-exec-rs"}[30m])) > 0.5
+        for: 30m
+        labels:
+          severity: info
+        annotations:
+          summary: "Compile cache hit ratio below 10%"
+          description: >
+            Expected when every job carries different source. If one source is
+            sent as many jobs, check the caller and AC_COMPILE_CACHE_MAX_MB.
+
+      - alert: RustSchedulerBudgetSaturated
+        expr: ac_scheduler_budget_used{job="aethercode-exec-rs"} > 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.resource }} scheduler budget above 95% on {{ $labels.instance }}"
+          description: >
+            The worker has used its whole {{ $labels.resource }} budget for 10
+            minutes; jobs queue behind it. Raise AC_WORKERS and the pod limits,
+            or add replicas.

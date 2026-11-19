@@ -1,0 +1,23 @@
+# Rust-only settings. Stream names, consumer group, rate limits and the rest come from
+# aethercode-exec-config, shared with the Go engine so a cutover is a scale change.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aethercode-exec-rs-config
+  namespace: aethercode
+data:
+  AC_WORKERS: "16"             # concurrency budget per worker pod (0 = a quarter of the cores)
+  # Shed (429 + Retry-After) past this many jobs waiting or in flight on a stream. The gateway
+  # cannot see the autoscaled pod count, so it is sized for the HPA maximum: maxReplicas 20 x
+  # AC_WORKERS 16 x 2 = 640. A lower cap would stop scale-out: at 64, in-flight jobs alone
+  # fill it at 4 pods, nothing ever queues and the queue-age HPA sees no backlog.
+  AC_ADMISSION_MAX_QUEUE_DEPTH: "640"
+  AC_COMPILE_CACHE_MAX_MB: "512"
+  AC_PREWARM: "16"
+  AC_DEBUG_PORT: "6060"
+  # /metrics, /livez, /readyz are bound to the pod IP so Prometheus and the kubelet can
+  # reach them; networkpolicy.yaml restricts 6060 to Prometheus (the kubelet is exempt).
+  AC_DEBUG_ADDR: "0.0.0.0"
+  AC_LOG_FORMAT: "json"
+  AC_LOG_LEVEL: "info"
+  # AC_OTLP_ENDPOINT: "http://otel-collector:4318"

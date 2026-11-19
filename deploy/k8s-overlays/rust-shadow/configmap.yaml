@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aethercode-exec-rs-shadow-config
+  namespace: aethercode
+data:
+  AC_WORKERS: "16"
+  AC_COMPILE_CACHE_MAX_MB: "512"
+  AC_PREWARM: "16"
+  AC_DEBUG_PORT: "6060"
+  AC_DEBUG_ADDR: "0.0.0.0"   # reached by Prometheus and the kubelet; see networkpolicy.yaml
+  AC_LOG_FORMAT: "json"
+  AC_LOG_LEVEL: "info"

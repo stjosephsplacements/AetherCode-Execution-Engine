@@ -1,0 +1,35 @@
+# REAL CUTOVER overlay: gateway + worker Deployments of the Rust engine.
+#
+# This includes the Go base (../../k8s, unchanged) and adds Rust pods that serve traffic.
+# The Rust workers join the SAME consumer group as the Go workers, so applying this
+# splits real jobs between the two engines. To only compare, apply ../rust-shadow instead.
+#
+#   kustomize edit set image ghcr.io/stjosephsplacements/aethercode-exec-rs=ghcr.io/<owner>/aethercode-exec-rs:<tag>
+#   kubectl apply -k deploy/k8s-overlays/rust/
+#
+# Prerequisites:
+#   - deploy/k8s/.env.secret (same secret the Go engine uses; see .env.secret.example)
+#   - an external metrics API serving ac_queue_age_seconds_max for the worker HPA
+#     (Prometheus Adapter or KEDA; rule in hpa.yaml, docs/ARCHITECTURE.md)
+#   - a Prometheus namespace labelled kubernetes.io/metadata.name=monitoring with pods
+#     labelled app.kubernetes.io/name=prometheus (see networkpolicy.yaml)
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aethercode
+
+resources:
+  - ../../k8s
+  - configmap.yaml
+  - gateway.yaml
+  - worker.yaml
+  - service.yaml
+  - pdb.yaml
+  - hpa.yaml
+  - networkpolicy.yaml
+
+# The image is not published by the release workflow yet and there is no default tag:
+# the placeholder below fails the pull until you set the tag you pushed.
+images:
+  - name: ghcr.io/stjosephsplacements/aethercode-exec-rs
+    newTag: SET_ME

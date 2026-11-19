@@ -1,0 +1,156 @@
+# Prometheus is admitted on 6060 from namespaces labelled kubernetes.io/metadata.name=monitoring
+# AND pods labelled app.kubernetes.io/name=prometheus. Edit both selectors to match your
+# installation. Kubelet probes are not blocked by NetworkPolicy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aethercode-exec-rs-gateway-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aethercode-exec-rs
+      app.kubernetes.io/component: gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Gateway HTTP: same sources as the Go gateway policy
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 5100
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 6060
+  egress:
+    # DNS only to the cluster resolver: `to: []` would allow port 53 to any address.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-judge
+      ports:
+        - protocol: TCP
+          port: 5050
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # OIDC issuer / OTLP over TLS; narrow to the IdP's CIDR as in the Go policy.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - protocol: TCP
+          port: 443
+---
+# Workers take no client traffic: only Prometheus on 6060; egress to DNS, go-judge, Postgres, Redis.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aethercode-exec-rs-worker-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aethercode-exec-rs
+      app.kubernetes.io/component: worker
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: prometheus
+      ports:
+        - protocol: TCP
+          port: 6060
+  egress:
+    # DNS only to the cluster resolver: `to: []` would allow port 53 to any address.
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-judge
+      ports:
+        - protocol: TCP
+          port: 5050
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+---
+# go-judge only admits aethercode-exec (Go); additive policy admitting the Rust gateway and workers.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: go-judge-allow-rust-engine
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: go-judge
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aethercode-exec-rs
+      ports:
+        - protocol: TCP
+          port: 5050

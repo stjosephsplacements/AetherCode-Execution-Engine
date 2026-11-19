@@ -22,3 +22,6 @@ loadgen
 *.out
 *.exe
 .DS_Store
+
+# Rust build outputs
+rust/target

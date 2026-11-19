@@ -25,7 +25,7 @@ func TestAdmissionCheck(t *testing.T) {
 	ctx := context.Background()
 	stream := "ac:submissions:run"
 
-	if ok, err := AdmissionCheck(ctx, rdb, stream, 100); err != nil || !ok {
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers", 100); err != nil || !ok {
 		t.Fatalf("empty stream should be admitted, ok=%v err=%v", ok, err)
 	}
 
@@ -34,8 +34,50 @@ func TestAdmissionCheck(t *testing.T) {
 			t.Fatalf("XAdd failed: %v", err)
 		}
 	}
-	if ok, err := AdmissionCheck(ctx, rdb, stream, 100); err != nil || ok {
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers", 100); err != nil || ok {
 		t.Fatalf("over-depth stream should be rejected, ok=%v err=%v", ok, err)
+	}
+}
+
+// TestAdmissionCheckCountsUndeliveredAndInFlightJobs: with a consumer group, depth is the group's
+// undelivered lag plus pending entries, not the stream length. miniredis does not advance a group's
+// lag on XREADGROUP, so the acknowledged-history case (an idle queue must admit) is checked against
+// real Redis in the Rust engine's queue tests and by hand for this function.
+func TestAdmissionCheckCountsUndeliveredAndInFlightJobs(t *testing.T) {
+	rdb := newMiniredis(t)
+	ctx := context.Background()
+	stream, group := "ac:submissions:run", "workers"
+	if err := rdb.XGroupCreateMkStream(ctx, stream, group, "0").Err(); err != nil {
+		t.Fatalf("XGroupCreateMkStream: %v", err)
+	}
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers", 100); err != nil || !ok {
+		t.Fatalf("a stream with an empty group should be admitted, ok=%v err=%v", ok, err)
+	}
+	for i := 0; i < 150; i++ {
+		if err := rdb.XAdd(ctx, &goredis.XAddArgs{Stream: stream, Values: map[string]any{"i": i}}).Err(); err != nil {
+			t.Fatalf("XAdd: %v", err)
+		}
+	}
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers", 100); err != nil || ok {
+		t.Fatalf("150 undelivered jobs should be rejected, ok=%v err=%v", ok, err)
+	}
+	// Another group's backlog (a shadow engine) does not count against this one.
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers-rust", 100); err != nil || ok {
+		t.Fatalf("a stream without the caller's group falls back to its length, ok=%v err=%v", ok, err)
+	}
+}
+
+// TestAdmissionCheckFailsOpenWhenXInfoFails: an XINFO error is returned with the check admitting,
+// instead of falling back to XLEN and rejecting on history the group has already acknowledged.
+func TestAdmissionCheckFailsOpenWhenXInfoFails(t *testing.T) {
+	rdb := newMiniredis(t)
+	ctx := context.Background()
+	stream := "ac:submissions:run"
+	if err := rdb.Set(ctx, stream, "not a stream", 0).Err(); err != nil {
+		t.Fatalf("Set: %v", err)
+	}
+	if ok, err := AdmissionCheck(ctx, rdb, stream, "workers", 1); err == nil || !ok {
+		t.Fatalf("a failed XINFO should admit and return the error, ok=%v err=%v", ok, err)
 	}
 }
 

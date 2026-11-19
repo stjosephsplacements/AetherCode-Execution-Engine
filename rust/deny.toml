@@ -1,0 +1,43 @@
+[advisories]
+version = 2
+yanked = "deny"
+# The first three are not in the shipped binary (checked with `cargo tree -i <crate> -e normal,build`).
+# The rest are unmaintained-crate notices, not vulnerabilities, for crates that can ship (chrono is a
+# direct dependency of the engine; humantime also serves the loadgen tool); each is revisited on upgrade.
+ignore = [
+  { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys is only in Cargo.lock (an optional sqlx driver); it is not in the dependency graph" },
+  { id = "RUSTSEC-2023-0071", reason = "rsa is a dev-dependency of ae-gateway (test JWT keys); the engine does not ship it" },
+  { id = "RUSTSEC-2025-0111", reason = "tokio-tar comes only through testcontainers, a dev-dependency" },
+  { id = "RUSTSEC-2026-0543", reason = "chrono unmaintained, no replacement; revisit when one exists" },
+  { id = "RUSTSEC-2026-0542", reason = "humantime unmaintained, used only to parse durations; revisit when a replacement exists" },
+  { id = "RUSTSEC-2025-0134", reason = "rustls-pemfile unmaintained, pulled in by a dependency; revisit on upgrade" },
+  { id = "RUSTSEC-2024-0449", reason = "unsafe-libyaml unmaintained, pulled in by a dependency; revisit on upgrade" },
+]
+
+[licenses]
+version = 2
+allow = [
+  "MIT",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+  "CC0-1.0",
+  # xxhash-rust (Boost Software License, permissive).
+  "BSL-1.0",
+  # webpki-roots (CA bundle for the rustls TLS to Postgres).
+  "CDLA-Permissive-2.0",
+]
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
