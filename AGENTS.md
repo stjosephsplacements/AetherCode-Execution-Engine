@@ -60,8 +60,8 @@ cargo deny check && cargo audit
 cargo +nightly fuzz run normalize_output -- -max_total_time=30
 cargo +nightly fuzz run judge_output -- -max_total_time=30
 
-# Image (context = repo root) and compose profiles
-docker build -f rust/Dockerfile -t aethercode-exec-rs:dev .
+# Image and compose profiles (run from the repository root: the build context needs migrations/)
+cd .. && docker build -f rust/Dockerfile -t aethercode-exec-rs:dev .
 docker compose --profile rust up --build engine-rs
 ```
 

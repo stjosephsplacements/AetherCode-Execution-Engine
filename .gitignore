@@ -53,3 +53,4 @@ rust/target/
 
 # Shadow worker DB credentials
 deploy/k8s-overlays/rust-shadow/.env.shadow
+PENDING.md

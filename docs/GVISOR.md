@@ -11,15 +11,24 @@ RuntimeClass its node cannot run is never scheduled.
 
 ## Before applying
 
-1. Install `runsc` and `containerd-shim-runsc-v1` on every node that runs go-judge.
+1. Install `runsc` and `containerd-shim-runsc-v1` on every node that runs go-judge (for the one-node
+   trial below, on that node only).
 2. Register the handler with containerd (k3s: add a `[plugins."io.containerd.cri.v1.runtime".containerd.runtimes.runsc]`
    block with `runtime_type = "io.containerd.runsc.v1"` to `config.toml.tmpl`, then restart k3s).
-3. `kubectl apply -f deploy/k8s/runtimeclass-gvisor.yaml` and check `kubectl get runtimeclass gvisor`.
+3. The overlay creates the RuntimeClass (`deploy/k8s-overlays/rust-gvisor/runtimeclass.yaml`); to check the
+   handler first, `kubectl apply -f` that file and run `kubectl get runtimeclass gvisor`.
 
 ## Compatibility checklist (do this on one node first)
 
 gVisor ignores `privileged: true` (the current go-judge pod), and go-judge needs mount namespaces and cgroup v2
-writes. Verify, in a staging namespace, before relying on it:
+writes. A namespace does not limit the blast radius: the RuntimeClass is cluster-scoped and the overlay patches
+the whole go-judge DaemonSet. Restrict the trial to one node, then verify before relying on it:
+
+1. Label the node that has `runsc`: `kubectl label node <node> aethercode/gvisor=true`.
+2. In a copy of the overlay, add a second patch to the go-judge DaemonSet that sets
+   `/spec/template/spec/nodeSelector` to `{aethercode/gvisor: "true"}`, so the other nodes run no go-judge
+   pod during the trial (or run the trial in a separate cluster). Remove the patch once the checklist passes
+   and `runsc` is installed everywhere.
 
 - go-judge starts and `GET /version` answers.
 - Smoke: run the C, C++, Python and Java hello-worlds through `/run`; all return `Accepted`.

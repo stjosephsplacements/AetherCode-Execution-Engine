@@ -110,7 +110,7 @@ services:
       AC_RUN_STREAM: "ac:rs:submissions:run"
       AC_BULK_STREAM: "ac:rs:submissions:bulk"
     ports:
-      - "5101:5100"
+      - "127.0.0.1:5101:5100"
     depends_on:
       db:
         condition: service_healthy
@@ -132,9 +132,8 @@ services:
     image: aethercode-exec-rs:dev
     command: ["--role", "worker", "--shadow"]
     environment:
-      # Dev default is the owner DSN. Outside a throwaway stack set AC_SHADOW_DATABASE_URL to a
-      # read-only role (SQL in docs/ARCHITECTURE.md, "Shadow database role").
-      AC_DATABASE_URL: "${AC_SHADOW_DATABASE_URL:-postgres://${POSTGRES_USER:-aethercode}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-aethercode_exec}}"
+      # A read-only role is required, never the owner DSN (SQL in docs/ARCHITECTURE.md, "Shadow database role").
+      AC_DATABASE_URL: "${AC_SHADOW_DATABASE_URL:?Set AC_SHADOW_DATABASE_URL to a read-only role}"
       AC_REDIS_ADDR: "redis:6379"
       AC_JUDGE_URL: "http://go-judge:5050"
       AC_JUDGE_TOKEN: "${AC_JUDGE_TOKEN}"

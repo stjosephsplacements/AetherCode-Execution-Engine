@@ -1,9 +1,11 @@
 # Rust vs Go engine: load benchmark runbook
 
-Status: runbook. No numbers have been recorded yet. go-judge needs a privileged
-container with cgroups v2 and namespaces; it was not run on the macOS development
-machine, so no Go-versus-Rust figures exist. The repo owner fills the results table on
-the 256-core server.
+Status: runbook, plus one recorded result: a single 200-student run per engine
+(section "Results: 2026-11-19, 200 students" at the end, which is the authoritative record).
+That run missed the 200-student targets below for both engines. The 1000- and 5000-student
+loads, the three-repeat variance runs and the cold/warm table in "Results (to be filled...)"
+have not been run, so that table stays empty. go-judge needs a privileged container with
+cgroups v2 and namespaces; it was not run on the macOS development machine.
 
 ## Tools
 
@@ -16,9 +18,10 @@ Cold vs warm: the verdict payload has no compile-cache flag, so `loadgen` classi
 first submission of each `(language, source)` pair as COLD and every repeat as WARM.
 A pair counts as seen only after its POST was accepted. Students that submit a new pair
 at the same moment can inflate WARM slightly while the first copy compiles. The compile
-cache survives between runs, so restart the engine before every repeat or the next run
-starts warm. The compile-cache hit rate comes from the engine's `ac_compile_cache_hits_total`
-metric (divide by compile requests), not from `loadgen`. POST retries after 429/5xx are
+cache survives between runs, so restart the engine before every run (each repeat, and between
+engines) or the next run starts warm. The compile-cache hit rate comes from the engine's `ac_compile_cache_hits_total`
+metric (divide by compile requests), not from `loadgen`. POST retries after 429 (honouring `Retry-After`; 5xx is not retried, a retry could duplicate a
+job) are
 reported as `post_retries`, apart from `error_rate`, and are excluded from ingestion latency.
 
 ## Targets (256-core server)
@@ -42,8 +45,8 @@ cd rust && cargo build --release -p ae-loadgen -p ae-shadowdiff -p ae-engine
 ## Run: Go engine
 
 ```bash
-# append to .env if one exists (do not overwrite it); choose real values
-printf "POSTGRES_PASSWORD=...\nAC_JUDGE_TOKEN=...\n" >> .env
+# Put POSTGRES_PASSWORD and AC_JUDGE_TOKEN in .env with an editor (do not overwrite an existing
+# file, and keep secrets off command lines: they show up in `ps` and shell history).
 docker compose up --build -d
 curl -fsS http://127.0.0.1:5100/api/v1/health
 ```
@@ -55,17 +58,19 @@ Rust one on the same port with the same environment as the compose `engine` serv
 
 ```bash
 docker compose stop engine
+set -a; . ./.env; set +a                      # exports POSTGRES_PASSWORD and AC_JUDGE_TOKEN
+: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}"
 export AC_GATEWAY_ADDR=0.0.0.0:5100
 export AC_DATABASE_URL="postgres://aethercode:$POSTGRES_PASSWORD@127.0.0.1:5433/aethercode_exec"
 export AC_REDIS_ADDR=127.0.0.1:6379
-export AC_JUDGE_URL=http://127.0.0.1:5050 AC_JUDGE_TOKEN=...   # as in .env
+export AC_JUDGE_URL=http://127.0.0.1:5050
 export AC_AUTH_ENABLED=false AC_ALLOW_UNAUTH=true
 rust/target/release/engine
 ```
 
 ## Load
 
-Run each load three times per engine, restarting the engine between engines. Use `--json`
+Run each load three times per engine, restarting the engine before every run. Use `--json`
 for the record and the table for reading.
 
 ```bash
@@ -98,14 +103,15 @@ With the Go engine authoritative, run the Rust engine beside it on the same stre
 ```bash
 rust/target/release/engine --role worker --shadow
 # drive load against the Go gateway with loadgen, then:
-rust/target/release/shadowdiff --redis redis://127.0.0.1:6379/ \
-    --pg "postgres://aethercode:$POSTGRES_PASSWORD@127.0.0.1:5433/aethercode_exec" --since 1h
+export SHADOWDIFF_REDIS=redis://127.0.0.1:6379/
+export SHADOWDIFF_PG="postgres://aethercode:$POSTGRES_PASSWORD@127.0.0.1:5433/aethercode_exec"
+rust/target/release/shadowdiff --since 1h
 ```
 
 `--pg` must connect as the owner role or one that bypasses row-level security; under RLS
-every row looks missing. The URL can come from `SHADOWDIFF_PG` (then `AC_DATABASE_URL`) and
-Redis from `SHADOWDIFF_REDIS`: command-line flags are visible in `ps`, so prefer the
-environment when a URL holds a password.
+every row looks missing. The URL comes from `SHADOWDIFF_PG` (then `AC_DATABASE_URL`) and
+Redis from `SHADOWDIFF_REDIS`: command-line flags are visible in `ps`, so pass URLs that hold a
+password through the environment, as above.
 
 The tool fails closed. Exit 1 on any diff, any unreadable shadow record, or when nothing was
 compared while jobs are pending; `--fail-on-pending` also fails on any pending job and lists
@@ -118,6 +124,8 @@ had expired) are reported separately and are not diffs; rerun until `pending=0`.
 
 ## Results (to be filled by the repo owner on the 256-core server)
 
+Not yet run: the measured 200-student comparison is in "Results: 2026-11-19, 200 students" below.
+
 | Students | Engine | Cache | p50 ms | p95 ms | p99 ms | Error rate | Ingest p50 ms | Hit rate |
 |---|---|---|---|---|---|---|---|---|
 | 200 | Go | cold | | | | | | |
@@ -129,7 +137,7 @@ had expired) are reported separately and are not diffs; rerun until `pending=0`.
 | 1000 | Rust | cold | | | | | | |
 | 1000 | Rust | warm | | | | | | |
 
-Shadow parity result (`compared/matched/diff/pending/ignored/unreadable/skipped_since`):
+Shadow parity result (`compared/matched/diff/pending/ignored/unreadable/skipped_since`): the 2026-11-19 run against the production Go engine compared 21 and matched 21 with 0 diffs (C, C++, Python, Java); the other counters were not recorded.
 
 ## Smoke test (not a benchmark)
 
@@ -152,14 +160,22 @@ Go ran as the host binary with `AC_WORKER_COUNT=16`; Rust ran in its production 
 | Verdict p50 / p95 / p99 (warm) | 2.56 / 5.87 / 8.14 s | 2.64 / 5.42 / 7.68 s |
 | Verdict mix | 6677 accepted, 273 CE, 67 RE, 183 TLE, 122 WA | 6717, 272, 66, 186, 128 |
 
+**Target missed.** The runbook target for 200 students is p50 < 500 ms and p95 < 1 s. Warm verdicts were
+2.56 s p50 / 5.87 s p95 on Go and 2.64 s p50 / 5.42 s p95 on Rust, so both engines missed it by roughly 5x at p50
+and 5x or more at p95. The shared go-judge (below) is the likely cause, but this run did not isolate it, so the
+target is not shown to be reachable on this hardware.
+
+This is one run per engine: the runbook asks for three, so there is no run-to-run variance and no noise estimate.
+
 What this shows and does not show:
 
-- The two engines are indistinguishable at this load. Both were limited by the shared go-judge sandbox (about 39 jobs/s,
+- The two engines did not differ measurably in this single run, at a load where both were far over target. Both were limited by the shared go-judge sandbox (about 39 jobs/s,
   with several seconds of queueing for a verdict), not by the engine. A tool that is not the bottleneck cannot be faster.
   Ingest is about 1 ms on both.
 - The verdict mix agrees within noise, which is what the parity run (21 of 21 identical verdicts) showed deterministically.
 - The only cold verdicts were 9 per run, so the cold-path comparison has no weight.
 - **Not measured**: 1000 or 5000 students, a go-judge with more parallelism, gVisor overhead (no `runsc` on the node), and
   anything about memory or CPU of the engine itself. A fair test of the engines needs a go-judge that is not the limit.
-- The go-judge was the production cluster's, shared with a Playwright run at the same time, so absolute times carry that noise.
-  The two engines ran minutes apart under the same conditions.
+- The go-judge was the production cluster's, shared with a Playwright run during the benchmark, so absolute times carry
+  that noise. The conditions were uncontrolled: the engines ran minutes apart and the competing load was not measured,
+  so they did not necessarily see identical load.

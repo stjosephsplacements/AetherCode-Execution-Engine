@@ -106,7 +106,7 @@ make down
 The Rust engine (see `docs/ARCHITECTURE.md`, "Rust engine") runs beside it under a compose profile on port 5101:
 
 ```bash
-docker compose --profile rust up --build engine-rs
+docker compose --profile rust up --build -d engine-rs
 curl -fsS http://127.0.0.1:5101/readyz
 ```
 

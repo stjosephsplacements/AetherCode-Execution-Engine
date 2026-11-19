@@ -31,15 +31,19 @@ spec:
         runAsGroup: 65532
         seccompProfile:
           type: RuntimeDefault
-      # 120 s job drain + HTTP close margin. No preStop: the engine keeps serving (not
-      # ready) while it drains, so in-flight clients can still read results.
-      terminationGracePeriodSeconds: 150
+      # The gateway role has no workers, so nothing drains: the listener closes right after
+      # SIGTERM. The preStop sleep keeps serving while endpoint removal reaches kube-proxy, so
+      # no new connection is refused. Grace: that sleep + the 5 s HTTP close + margin.
+      terminationGracePeriodSeconds: 30
       containers:
         - name: engine
           # The tag comes from images: in kustomization.yaml (kustomize edit set image).
           image: ghcr.io/stjosephsplacements/aethercode-exec-rs
           imagePullPolicy: IfNotPresent
           args: ["--role", "gateway"]
+          lifecycle:
+            preStop:
+              sleep: {seconds: 10}
           ports:
             - {name: http, containerPort: 5100, protocol: TCP}
             - {name: debug, containerPort: 6060, protocol: TCP}

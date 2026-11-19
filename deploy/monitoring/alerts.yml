@@ -134,7 +134,23 @@ groups:
             The metrics sidecar or the engine behind it is not answering. Check
             the pod, its logs and /readyz.
 
-      # The oldest entry's age is the autoscaling signal (HPA target is 10s); this
+      # `up == 0` has no series once Kubernetes removes every scrape target, so also alert on the
+      # deployments themselves (needs kube-state-metrics). Silent where no Rust deployment exists.
+      - alert: RustEngineNoAvailablePods
+        expr: >
+          kube_deployment_spec_replicas{deployment=~"aethercode-exec-rs-(gateway|worker)"} > 0
+          and on (namespace, deployment)
+          kube_deployment_status_replicas_available{deployment=~"aethercode-exec-rs-(gateway|worker)"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Rust engine deployment {{ $labels.deployment }} has no available pods"
+          description: >
+            The deployment wants replicas but none is available, so there are also no
+            scrape targets for RustEngineDown to see. Check the rollout and pod events.
+
+      # The oldest waiting entry's age is the autoscaling signal (HPA target is 10s); this
       # fires when scaling cannot keep up.
       - alert: RustQueueAgeHigh
         expr: max by (stream) (ac_queue_age_seconds{job="aethercode-exec-rs"}) > 30

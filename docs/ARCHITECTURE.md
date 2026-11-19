@@ -199,11 +199,11 @@ ALTER ROLE aethercode_shadow SET default_transaction_read_only = on;
 
 ### Admission and 429 semantics
 
-`POST /api/v1/execute` answers `429` with `Retry-After` when the queue is at capacity (`AC_ADMISSION_MAX_QUEUE_DEPTH`; 0 = 4 x workers), the per-user or per-IP rate limit is hit, or the ingest concurrency limit is exhausted. `Retry-After` follows the measured job drain rate. `503` + `Retry-After: 5` means the engine is not ready (starting up or draining); nothing is enqueued.
+`POST /api/v1/execute` answers `429` with `Retry-After` when the queue is at capacity (`AC_ADMISSION_MAX_QUEUE_DEPTH`; 0 = 2 x workers; the count includes jobs in flight), the per-user or per-IP rate limit is hit, or the ingest concurrency limit is exhausted. `Retry-After` follows the measured job drain rate. `503` + `Retry-After: 5` means the engine is not ready (starting up or draining); nothing is enqueued.
 
 ### Readiness and drain
 
-`/livez` is up as soon as the listener is bound; `/readyz` is 503 until startup (DB, Redis, sandbox and language self-tests, pre-warm) finishes. On SIGTERM/SIGINT: `/readyz` goes 503 and `execute` returns 503, workers stop reading and get up to 120 s for in-flight jobs, the HTTP server keeps serving all other routes (results, SSE, health) until the drain ends, telemetry is flushed, exit 0. A second signal exits 1. Use `terminationGracePeriodSeconds >= 150`; no `preStop` is needed.
+`/livez` is up as soon as the listener is bound; `/readyz` is 503 until startup (DB, Redis, sandbox and language self-tests, pre-warm) finishes. On SIGTERM/SIGINT: `/readyz` goes 503 and `execute` returns 503, workers stop reading and get up to 120 s for in-flight jobs, the HTTP server keeps serving all other routes (results, SSE, health) until the drain ends, telemetry is flushed, exit 0. A second signal exits 1. Use `terminationGracePeriodSeconds >= 150` for workers; no `preStop` is needed there. A gateway-only pod has nothing to drain and closes its listener at once, so give it a short `preStop` sleep (the Kubernetes overlay uses 10 s) to cover endpoint propagation.
 
 ### Metrics and probes
 

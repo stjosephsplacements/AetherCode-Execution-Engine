@@ -7,9 +7,11 @@ metadata:
   namespace: aethercode
 data:
   AC_WORKERS: "16"             # concurrency budget per worker pod (0 = a quarter of the cores)
-  # Shed (429 + Retry-After) past two queued jobs per worker slot: minReplicas 2 x AC_WORKERS 16 x 2.
-  # Raise it with the worker minimum; the gateway cannot see the autoscaled pod count.
-  AC_ADMISSION_MAX_QUEUE_DEPTH: "64"
+  # Shed (429 + Retry-After) past this many jobs waiting or in flight on a stream. The gateway
+  # cannot see the autoscaled pod count, so it is sized for the HPA maximum: maxReplicas 20 x
+  # AC_WORKERS 16 x 2 = 640. A lower cap would stop scale-out: at 64, in-flight jobs alone
+  # fill it at 4 pods, nothing ever queues and the queue-age HPA sees no backlog.
+  AC_ADMISSION_MAX_QUEUE_DEPTH: "640"
   AC_COMPILE_CACHE_MAX_MB: "512"
   AC_PREWARM: "16"
   AC_DEBUG_PORT: "6060"
