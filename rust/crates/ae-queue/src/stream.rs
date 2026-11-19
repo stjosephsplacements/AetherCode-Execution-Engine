@@ -16,7 +16,7 @@ impl Queue {
             .arg("CREATE")
             .arg(stream)
             .arg(&self.group)
-            .arg("0")
+            .arg(self.group_start)
             .arg("MKSTREAM")
             .query_async(&mut self.conn.clone())
             .await;
@@ -71,18 +71,29 @@ impl Queue {
             .await?)
     }
 
-    /// Age of the oldest entry still in the stream, from its id; zero when empty.
+    /// Age of the oldest entry the group has not yet delivered (zero when none are waiting): how
+    /// long the next job has been queued. Acked history and in-flight jobs do not count, because
+    /// they stay in the stream until `MAXLEN` trims them.
     ///
     /// # Errors
     /// Fails on a Redis error.
     pub async fn oldest_age(&self, stream: &str) -> Result<Duration> {
+        let mut conn = self.conn.clone();
+        let groups: StreamInfoGroupsReply = redis::cmd("XINFO")
+            .arg("GROUPS")
+            .arg(stream)
+            .query_async(&mut conn)
+            .await?;
+        let Some(g) = groups.groups.iter().find(|g| g.name == self.group) else {
+            return Ok(Duration::ZERO);
+        };
         let r: StreamRangeReply = redis::cmd("XRANGE")
             .arg(stream)
-            .arg("-")
+            .arg(format!("({}", g.last_delivered_id))
             .arg("+")
             .arg("COUNT")
             .arg(1)
-            .query_async(&mut self.conn.clone())
+            .query_async(&mut conn)
             .await?;
         let age = r
             .ids

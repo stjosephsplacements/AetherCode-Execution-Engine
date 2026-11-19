@@ -69,6 +69,18 @@ fn remote_ip_rejects_unparseable_forwarded_values() {
 }
 
 #[test]
+fn remote_ip_non_ascii_forwarded_chain_does_not_fall_back_to_x_real_ip() {
+    let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_owned()]);
+    let mut h = HeaderMap::new();
+    h.insert(
+        "x-forwarded-for",
+        HeaderValue::from_bytes(b"8.8.8.8\xff").unwrap(),
+    );
+    h.insert("x-real-ip", HeaderValue::from_static("9.9.9.9"));
+    assert_eq!(remote_ip(ip("10.0.0.2"), &h, &trusted), "10.0.0.2");
+}
+
+#[test]
 fn remote_ip_rightmost_untrusted_wins_and_x_real_ip_fallback() {
     let trusted = parse_trusted_proxies(&["10.0.0.0/8".to_owned()]);
     // A client-supplied left-most entry cannot override the proxy-appended one.

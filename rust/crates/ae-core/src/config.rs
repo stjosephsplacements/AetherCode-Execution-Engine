@@ -10,8 +10,8 @@ pub struct Config {
     pub database_url: String,
     pub redis_addr: String,
     pub redis_password: String,
-    /// `AC_REDIS_DB`: the logical Redis database. The Go engine honours it; ignoring it put the Rust engine on
-    /// database 0 beside a Go engine on database 1, with empty streams and an unused consumer group.
+    /// `AC_REDIS_DB`: the logical Redis database. Rust-only: this repo's Go engine has no such
+    /// setting and always uses database 0, so leave it at 0 to share streams with Go.
     pub redis_db: u32,
     pub judge_url: String,
     pub judge_token: String,
@@ -83,7 +83,7 @@ impl Config {
 
     pub fn from_map(m: &HashMap<String, String>) -> Result<Self, ConfigError> {
         let s = |k: &'static str, d: &str| get(m, k).map_or_else(|| d.to_owned(), str::to_owned);
-        Ok(Self {
+        let cfg = Self {
             gateway_addr: s("AC_GATEWAY_ADDR", "127.0.0.1:5100"),
             database_url: s(
                 "AC_DATABASE_URL",
@@ -114,7 +114,7 @@ impl Config {
             rate_limit_burst: num(m, "AC_RATE_LIMIT_BURST", 10)?,
             rate_limit_unauth_per_minute: num(m, "AC_RATE_LIMIT_UNAUTH_PER_MINUTE", 0)?,
             rate_limit_unauth_burst: num(m, "AC_RATE_LIMIT_UNAUTH_BURST", 5)?,
-            admission_max_queue_depth: num(m, "AC_ADMISSION_MAX_QUEUE_DEPTH", 5000)?,
+            admission_max_queue_depth: num(m, "AC_ADMISSION_MAX_QUEUE_DEPTH", 0)?,
 
             cors_allowed_origins: s("AC_CORS_ALLOWED_ORIGINS", ""),
             trusted_proxies: get(m, "AC_TRUSTED_PROXIES")
@@ -160,7 +160,24 @@ impl Config {
                     )
                 },
             )?,
-        })
+        };
+        cfg.validate()?;
+        Ok(cfg)
+    }
+
+    /// Go's `Config.Validate` rate-limit rules: a zero user limit would answer every
+    /// authenticated request with 429.
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (key, value) in [
+            ("AC_RATE_LIMIT_PER_MINUTE", self.rate_limit_per_minute),
+            ("AC_RATE_LIMIT_BURST", self.rate_limit_burst),
+            ("AC_RATE_LIMIT_UNAUTH_BURST", self.rate_limit_unauth_burst),
+        ] {
+            if value == 0 {
+                return Err(invalid(key, "0", "a positive integer"));
+            }
+        }
+        Ok(())
     }
 
     /// `AC_WORKERS`, or a quarter of the available cores (minimum 1) when 0.
@@ -346,7 +363,7 @@ mod tests {
         assert_eq!(c.rate_limit_burst, 10);
         assert_eq!(c.rate_limit_unauth_per_minute, 0);
         assert_eq!(c.rate_limit_unauth_burst, 5);
-        assert_eq!(c.admission_max_queue_depth, 5000);
+        assert_eq!(c.admission_max_queue_depth, 0);
         assert_eq!(c.submit_stream_name, "ac:submissions:submit");
         assert_eq!(c.run_stream_name, "ac:submissions:run");
         assert_eq!(c.bulk_stream_name, "ac:submissions:bulk");
@@ -433,6 +450,18 @@ mod tests {
     }
 
     #[test]
+    fn zero_rate_limits_are_rejected() {
+        for key in [
+            "AC_RATE_LIMIT_PER_MINUTE",
+            "AC_RATE_LIMIT_BURST",
+            "AC_RATE_LIMIT_UNAUTH_BURST",
+        ] {
+            assert!(Config::from_map(&map(&[(key, "0")])).is_err(), "{key}");
+        }
+        assert!(Config::from_map(&map(&[("AC_RATE_LIMIT_UNAUTH_PER_MINUTE", "0")])).is_ok());
+    }
+
+    #[test]
     fn auto_queue_depth_is_twice_the_workers() {
         let c = Config::from_map(&map(&[
             ("AC_WORKERS", "3"),
@@ -441,6 +470,8 @@ mod tests {
         .unwrap();
         assert_eq!(c.max_queue_depth(), 6);
         let c = Config::from_map(&map(&[("AC_WORKERS", "3")])).unwrap();
+        assert_eq!(c.max_queue_depth(), 6, "unset follows the worker count");
+        let c = Config::from_map(&map(&[("AC_ADMISSION_MAX_QUEUE_DEPTH", "5000")])).unwrap();
         assert_eq!(c.max_queue_depth(), 5000);
     }
 

@@ -189,6 +189,24 @@ impl Db {
         Ok(())
     }
 
+    /// Claims a stale queued submission for the orphan reaper: bumps `updated_at` only while the
+    /// row is still `queued` and still stale, so a worker that claimed it meanwhile, or another
+    /// reaper pass, wins and this returns false.
+    ///
+    /// # Errors
+    /// Fails on a malformed id or a database error.
+    pub async fn claim_orphan(&self, sub_id: &str) -> Result<bool> {
+        let n = sqlx::query(
+            "UPDATE submissions SET updated_at = now() \
+             WHERE id = $1 AND status = 'queued' AND updated_at < now() - interval '2 minutes'",
+        )
+        .bind(id(sub_id)?)
+        .execute(&self.pool)
+        .await?
+        .rows_affected();
+        Ok(n > 0)
+    }
+
     /// Writes the results and the terminal state in one transaction. Redelivery is a
     /// no-op: results conflict on `(submission_id, test_index)` and the update only
     /// touches non-terminal rows. Returns true when this call finished the submission, false

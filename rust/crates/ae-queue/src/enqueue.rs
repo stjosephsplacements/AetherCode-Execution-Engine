@@ -198,7 +198,12 @@ fn json<T: serde::Serialize>(v: &T) -> Result<String> {
     serde_json::to_string(v).map_err(|e| Error::Corrupt(e.to_string()))
 }
 
-fn checker_name(c: Checker) -> &'static str {
+/// The `checker` field Go workers dispatch on: they run a custom checker only when it says
+/// "custom", which Rust encodes as `checker_code` being set.
+fn checker_name(c: Checker, checker_code: &str) -> &'static str {
+    if !checker_code.is_empty() {
+        return "custom";
+    }
     match c {
         Checker::Exact => "exact",
         Checker::Token => "token",
@@ -229,7 +234,10 @@ impl Queue {
                 ("mem_bytes".into(), l.mem_bytes.to_string().into_bytes()),
                 ("stack_bytes".into(), l.stack_bytes.to_string().into_bytes()),
                 ("procs".into(), l.procs.to_string().into_bytes()),
-                ("checker".into(), checker_name(job.checker).into()),
+                (
+                    "checker".into(),
+                    checker_name(job.checker, &set.checker_code).into(),
+                ),
                 ("checker_code".into(), set.checker_code.clone().into_bytes()),
                 (
                     "checker_language".into(),

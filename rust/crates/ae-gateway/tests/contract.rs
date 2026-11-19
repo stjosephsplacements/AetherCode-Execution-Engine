@@ -148,7 +148,9 @@ impl Checker {
             assert!(ct.starts_with("text/event-stream"), "{ct}");
             Value::String(text)
         } else {
-            let schema = &content["application/json"]["schema"];
+            let schema = content["application/json"]
+                .get("schema")
+                .unwrap_or_else(|| panic!("{method} {path} {code}: no JSON schema in the spec"));
             let v: Value = serde_json::from_str(&text)
                 .unwrap_or_else(|e| panic!("{method} {path} {code}: not JSON ({e}): {text}"));
             let mut errs = Vec::new();
@@ -273,7 +275,10 @@ async fn openapi_contract() {
             other => panic!("unexpected {other}"),
         };
         let mut errs = Vec::new();
-        validate(&c.root, &schemas[name], &ev, "$", &mut errs);
+        let schema = schemas
+            .get(name)
+            .unwrap_or_else(|| panic!("schema {name} missing from the OpenAPI document"));
+        validate(&c.root, schema, &ev, "$", &mut errs);
         assert!(errs.is_empty(), "{errs:?}");
     }
 

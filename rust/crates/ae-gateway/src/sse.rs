@@ -246,7 +246,11 @@ pub async fn stream(
         }
         replay.extend_from_slice(&ev.marshal_sse());
         sent_up_to.clone_from(&ev.id);
-        terminal |= ev.is_terminal();
+        // The stream contract ends at the first VERDICT; later log entries are not sent.
+        if ev.is_terminal() {
+            terminal = true;
+            break;
+        }
     }
 
     let first: Option<Result<Bytes, Infallible>> =

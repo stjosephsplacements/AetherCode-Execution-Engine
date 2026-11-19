@@ -409,6 +409,28 @@ async fn depth_and_oldest_age() {
 }
 
 #[tokio::test]
+async fn oldest_age_ignores_delivered_and_acked_history() {
+    let mut e = env().await;
+    let old = format!("{}-0", now_ms() - 60_000);
+    let _: String = redis::cmd("XADD")
+        .arg(RUN)
+        .arg(&old)
+        .arg("submission_id")
+        .arg("old")
+        .query_async(&mut e.rdb)
+        .await
+        .unwrap();
+    assert!(e.q.oldest_age(RUN).await.unwrap() >= Duration::from_secs(60));
+    let delivered = e.q.read_batch().await.unwrap();
+    assert_eq!(ids(&delivered), ["old"]);
+    assert_eq!(
+        e.q.oldest_age(RUN).await.unwrap(),
+        Duration::ZERO,
+        "a delivered job is not waiting"
+    );
+}
+
+#[tokio::test]
 async fn depth_counts_waiting_and_in_flight_jobs_not_acked_history() {
     let mut e = env().await;
     go_enqueue(&mut e.rdb, RUN, "a").await;
@@ -581,6 +603,24 @@ async fn empty_stream_names_are_skipped() {
         .await
         .unwrap();
     assert!(!exists, "a stream named \"\" was created");
+}
+
+#[tokio::test]
+async fn tail_group_skips_history_present_at_creation() {
+    let mut e = env().await;
+    go_enqueue(&mut e.rdb, RUN, "history").await;
+    let c = common::cfg(&e.addr, &[("AC_CONSUMER_GROUP", "shadow-workers")]);
+    let q = ae_queue::Queue::connect_at_tail(&c, e.store.clone())
+        .await
+        .unwrap();
+    go_enqueue(&mut e.rdb, RUN, "fresh").await;
+    assert_eq!(ids(&q.read_batch().await.unwrap()), ["fresh"]);
+    // The default group still sees everything.
+    let mut all = e.q.read_batch().await.unwrap();
+    while all.len() < 2 {
+        all.extend(e.q.read_batch().await.unwrap());
+    }
+    assert_eq!(ids(&all), ["history", "fresh"]);
 }
 
 #[tokio::test]

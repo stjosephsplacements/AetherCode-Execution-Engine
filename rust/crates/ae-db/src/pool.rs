@@ -57,7 +57,9 @@ impl Db {
     }
 
     /// Begins a transaction on the app pool scoped to `tenant_id` (`app.tenant_id` is set
-    /// locally, which is what the RLS policies read).
+    /// locally, which is what the RLS policies read). Without `AC_DATABASE_APP_URL` this runs
+    /// on the owner pool like [`Db::app_pool`], which bypasses RLS: the scoping then has no
+    /// effect, so do not rely on it for isolation.
     ///
     /// # Errors
     /// Fails when the transaction cannot start.

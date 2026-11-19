@@ -47,7 +47,14 @@ pub fn remote_ip(peer: Option<IpAddr>, headers: &HeaderMap, trusted: &[IpNet]) -
         && !trusted.is_empty()
         && is_trusted(p, trusted)
     {
-        if let Some(xff) = header_str(headers, "x-forwarded-for") {
+        if headers
+            .get("x-forwarded-for")
+            .is_some_and(|v| !v.is_empty())
+        {
+            // An unreadable (non-ASCII) chain is unparseable like any invalid entry.
+            let Some(xff) = header_str(headers, "x-forwarded-for") else {
+                return p.to_string();
+            };
             for part in xff.split(',').rev() {
                 let part = part.trim();
                 if part.is_empty() {

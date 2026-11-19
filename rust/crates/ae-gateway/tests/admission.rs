@@ -103,6 +103,16 @@ async fn sheds_by_estimated_cost() {
 }
 
 #[tokio::test]
+async fn oversized_job_is_admitted_only_on_an_empty_queue() {
+    let (_c, addr) = redis().await;
+    let q = queue(&addr).await;
+    let a = Admission::new(q.clone(), 10, Arc::new(Drain::new()));
+    assert!(a.check(STREAM, 50.0).await.is_ok());
+    fill(&q, 1).await;
+    assert!(a.check(STREAM, 50.0).await.is_err());
+}
+
+#[tokio::test]
 async fn retry_after_without_drain_rate_is_ten_seconds() {
     let (_c, addr) = redis().await;
     let q = queue(&addr).await;

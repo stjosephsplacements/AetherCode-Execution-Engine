@@ -121,8 +121,8 @@ async fn sse_replays_then_streams_and_closes_on_verdict() {
     let (events, _) = read_sse(resp, Duration::from_secs(5)).await;
     assert_eq!(
         events.len(),
-        4,
-        "QUEUED, RUNNING, VERDICT and the late RUNNING in the log"
+        3,
+        "replay stops at VERDICT, not at the late RUNNING"
     );
     assert_eq!(events[2]["type"], "VERDICT");
 

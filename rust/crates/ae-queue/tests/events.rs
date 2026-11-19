@@ -108,7 +108,8 @@ async fn get_tests_round_trips_every_field() {
     let got = e.q.get_tests("job-all").await.unwrap();
     assert_eq!(got.set, set);
     assert_eq!(got.limits, j.limits);
-    assert_eq!(got.checker, Checker::Float);
+    // A custom checker is stored as "custom" for Go workers, which reads back as the default.
+    assert_eq!(got.checker, Checker::Exact);
 }
 
 #[tokio::test]
@@ -362,4 +363,20 @@ async fn stream_token_is_stored_per_job_with_ttl() {
     assert!(!e.q.verify_stream_token("job-t", "").await);
     assert!(!e.q.verify_stream_token("other", &tok).await);
     assert_ne!(e.q.issue_stream_token("job-t").await.unwrap(), tok);
+}
+
+#[tokio::test]
+async fn custom_checker_is_written_as_custom_for_go_workers() {
+    let mut e = env().await;
+    let set = TestSet {
+        tests: vec![td("a", "b")],
+        checker_code: "int main(){}".into(),
+        checker_language: "cpp".into(),
+        ..TestSet::default()
+    };
+    e.q.prepare_and_enqueue(&job("job-custom"), &set, "ac:s")
+        .await
+        .unwrap();
+    let name: String = e.rdb.hget("ac:tests:job-custom", "checker").await.unwrap();
+    assert_eq!(name, "custom");
 }

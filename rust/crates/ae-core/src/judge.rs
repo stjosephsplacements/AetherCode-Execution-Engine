@@ -184,29 +184,33 @@ fn parse_hex(s: &[u8]) -> Option<f64> {
     let mut dropped_exp: i64 = 0;
     let mut seen_dot = false;
     let mut digits = 0;
-    let mut prev_us = true; // underscore may directly follow the prefix
+    // Go's underscore rule: only between digits, or between the base prefix and a digit.
+    let mut us_ok = true;
+    let mut pending_us = false;
     while i < s.len() {
         let c = s[i];
         match c {
             b'_' => {
-                if prev_us && digits > 0 {
+                if !us_ok {
                     return None;
                 }
-                prev_us = true;
+                us_ok = false;
+                pending_us = true;
             }
             b'.' => {
-                if seen_dot {
+                if seen_dot || pending_us {
                     return None;
                 }
                 seen_dot = true;
-                prev_us = false;
+                us_ok = false;
             }
             _ => {
                 let Some(d) = (c as char).to_digit(16) else {
                     break;
                 };
                 digits += 1;
-                prev_us = false;
+                us_ok = true;
+                pending_us = false;
                 if mant >> 60 == 0 {
                     mant = mant << 4 | u64::from(d);
                     if seen_dot {
@@ -219,7 +223,7 @@ fn parse_hex(s: &[u8]) -> Option<f64> {
         }
         i += 1;
     }
-    if digits == 0 || prev_us && s.get(i - 1) == Some(&b'_') {
+    if digits == 0 || pending_us {
         return None;
     }
     if !s.get(i)?.eq_ignore_ascii_case(&b'p') {
@@ -254,6 +258,10 @@ fn parse_hex(s: &[u8]) -> Option<f64> {
     }
     if edigits == 0 || eus {
         return None;
+    }
+    if mant == 0 {
+        // Avoids `0 * inf` below for a huge exponent.
+        return Some(0.0);
     }
     let exp = (if eneg { -e } else { e }) + dropped_exp;
     let exp = i32::try_from(exp.clamp(-5000, 5000)).ok()?;
@@ -328,6 +336,16 @@ mod tests {
 
     fn j(c: Checker, expected: &str, actual: &str) -> bool {
         judge_output(c, actual.as_bytes(), expected.as_bytes())
+    }
+
+    #[test]
+    fn hex_floats_follow_go_underscore_rules_and_zero_mantissa() {
+        assert!(j(Float, "0x1_0p0", "0x10p0"));
+        assert!(j(Float, "0x_1p0", "1"));
+        assert!(j(Float, "0x0p5000", "0"), "a zero mantissa is 0, not NaN");
+        for bad in ["0x__1p0", "0x1._0p0", "0x1_.0p0", "0x1_p0"] {
+            assert!(!j(Float, "1", bad), "{bad} must not parse as a number");
+        }
     }
 
     #[test]

@@ -449,7 +449,15 @@ async fn orphaned_submissions_lists_only_stale_queued() {
     let orphans = e.db.orphaned_submissions().await.unwrap();
     assert!(orphans.contains(&old.id));
     assert!(!orphans.contains(&fresh.id));
-    e.db.touch_submission(&old.id).await.unwrap();
+    assert!(
+        !e.db.claim_orphan(&fresh.id).await.unwrap(),
+        "fresh rows are not claimable"
+    );
+    assert!(e.db.claim_orphan(&old.id).await.unwrap());
+    assert!(
+        !e.db.claim_orphan(&old.id).await.unwrap(),
+        "only one claimant wins"
+    );
     assert!(!e.db.orphaned_submissions().await.unwrap().contains(&old.id));
 }
 

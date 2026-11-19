@@ -45,18 +45,23 @@ impl Queue {
     /// ones are failed, the rest are sent to `tx` and stay pending until acked.
     ///
     /// # Errors
-    /// Fails on a Redis error; the remaining entries are retried next cycle.
+    /// The first Redis error of the pass, after every stream has been tried; failed streams are
+    /// retried next cycle.
     pub async fn reclaim_once(
         &self,
         tx: &mpsc::Sender<Delivery>,
         min_idle: Duration,
     ) -> Result<()> {
+        let mut first_err = None;
         for s in self.streams() {
-            // A stream that found no free slot does not stop the pass: later streams still
-            // get any slot freed meanwhile, so bulk reclaim is not starved.
-            self.reclaim_stream(s, tx, min_idle).await?;
+            // Neither a stream without a free slot nor one that errors stops the pass: later
+            // streams still get their turn, so bulk reclaim is not starved.
+            if let Err(e) = self.reclaim_stream(s, tx, min_idle).await {
+                tracing::error!(stream = s, err = %e, "reclaimer: stream failed");
+                first_err.get_or_insert(e);
+            }
         }
-        Ok(())
+        first_err.map_or(Ok(()), Err)
     }
 
     /// Returns when `tx` has no free slot (or is closed): claiming without a slot would only

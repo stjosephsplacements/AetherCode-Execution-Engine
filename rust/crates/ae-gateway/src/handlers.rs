@@ -718,20 +718,20 @@ async fn execute_traced(
         tests_key: format!("ac:tests:{job_id}"),
         expires_at: Some(unix_ms().saturating_add(timeout_ms)),
     };
+    // Every new job gets a stream token: unauthenticated callers need it to stream, read or
+    // cancel the job. It is issued first so a failure queues nothing instead of returning a
+    // job nobody can reach.
+    let stream_token = match st.queue.issue_stream_token(&job_id).await {
+        Ok(t) => t,
+        Err(e) => {
+            tracing::error!(submission_id = %job_id, error = %e, "issue stream token failed");
+            return json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        }
+    };
     if let Err(e) = st.queue.prepare_and_enqueue(&job, &set, &stream).await {
         tracing::error!(submission_id = %job_id, error = %e, "enqueue failed");
         return json_error(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
     }
-
-    // Every new job gets a stream token: unauthenticated callers need it to stream,
-    // read or cancel the job. A failure is not fatal; the job is already queued.
-    let stream_token = match st.queue.issue_stream_token(&job_id).await {
-        Ok(t) => t,
-        Err(e) => {
-            tracing::warn!(job_id = %job_id, error = %e, "failed to generate stream token");
-            String::new()
-        }
-    };
     json_response(
         StatusCode::CREATED,
         &ExecuteResponse {

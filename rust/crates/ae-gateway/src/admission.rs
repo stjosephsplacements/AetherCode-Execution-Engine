@@ -146,14 +146,17 @@ impl Admission {
         &self.drain
     }
 
-    /// Admits when `depth + est_cost <= max_depth`, where `est_cost` is the job's cost in
-    /// typical-job units (1.0 reproduces Go's `depth < max`). Fails open on Redis errors.
+    /// Admits when `depth + est_cost <= max_depth`, where `est_cost` (capped at `max_depth`) is
+    /// the job's cost in typical-job units (1.0 reproduces Go's `depth < max`). Fails open on Redis errors.
     ///
     /// # Errors
     /// [`Shed`] when over the limit.
     pub async fn check(&self, stream: &str, est_cost: f64) -> Result<(), Shed> {
+        #[allow(clippy::cast_precision_loss)]
+        let max = self.max_depth as f64;
+        // Capped at the limit so an oversized job is still admitted when the queue is empty.
         let cost = if est_cost.is_finite() && est_cost > 0.0 {
-            est_cost
+            est_cost.min(max)
         } else {
             1.0
         };
@@ -169,7 +172,7 @@ impl Admission {
             }
         };
         #[allow(clippy::cast_precision_loss)]
-        let excess = depth as f64 + cost - self.max_depth as f64;
+        let excess = depth as f64 + cost - max;
         if excess <= 0.0 {
             return Ok(());
         }

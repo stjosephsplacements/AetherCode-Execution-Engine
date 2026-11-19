@@ -77,6 +77,8 @@ pub struct Queue {
     client: redis::Client,
     conn: ConnectionManager,
     group: String,
+    /// Stream position new consumer groups start from: `0` (all history) or `$` (new entries).
+    group_start: &'static str,
     consumer: String,
     submit: String,
     run: String,
@@ -102,6 +104,23 @@ impl Queue {
     /// # Errors
     /// Fails when Redis is unreachable or a group cannot be created.
     pub async fn connect(cfg: &Config, store: Arc<dyn ExpiryStore>) -> Result<Queue> {
+        Self::connect_from(cfg, store, "0").await
+    }
+
+    /// Like [`Queue::connect`], but a group that does not exist yet starts at the stream's tail
+    /// (`$`) instead of replaying the retained history. For a shadow consumer joining a busy stream.
+    ///
+    /// # Errors
+    /// Fails when Redis is unreachable or a group cannot be created.
+    pub async fn connect_at_tail(cfg: &Config, store: Arc<dyn ExpiryStore>) -> Result<Queue> {
+        Self::connect_from(cfg, store, "$").await
+    }
+
+    async fn connect_from(
+        cfg: &Config,
+        store: Arc<dyn ExpiryStore>,
+        group_start: &'static str,
+    ) -> Result<Queue> {
         let url = cfg.redis_url();
         let client = redis::Client::open(url)?;
         let conn = client.get_connection_manager().await?;
@@ -110,6 +129,7 @@ impl Queue {
             client,
             conn,
             group: cfg.consumer_group.clone(),
+            group_start,
             consumer: format!("{host}-{}", std::process::id()),
             submit: cfg.submit_stream_name.clone(),
             run: cfg.run_stream_name.clone(),

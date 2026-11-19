@@ -396,6 +396,8 @@ pub async fn stack(opts: StackOpts) -> Stack {
         ("AC_WORKER_COUNT".to_owned(), "1".to_owned()),
         // Pinned: unset, the worker count is a quarter of this machine's cores.
         ("AC_WORKERS".to_owned(), "1".to_owned()),
+        // Unset, the limit is 2 x workers: far below what these tests enqueue.
+        ("AC_ADMISSION_MAX_QUEUE_DEPTH".to_owned(), "5000".to_owned()),
     ]);
     for (k, v) in &opts.env {
         env.insert((*k).to_owned(), (*v).to_owned());
