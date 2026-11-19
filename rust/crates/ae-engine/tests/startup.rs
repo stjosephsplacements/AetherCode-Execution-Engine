@@ -380,9 +380,10 @@ async fn shadow_record(r: &mut redis::aio::ConnectionManager, id: &str) -> Value
 async fn shadow_expired_job_publishes_nothing() {
     let infra = infra().await;
     let judge = FakeJudge::start(&[]).await;
-    let (db, queue, id) = seed_job(&infra, Some(1)).await;
-    let mut sub = queue.subscribe(&id).await.unwrap();
-    let _e = spawn_engine(
+    // Creates the schema and the Go group; the shadow group starts at the tail, so this
+    // earlier job is skipped and the real one is enqueued once the engine is ready.
+    seed_job(&infra, None).await;
+    let e = spawn_engine(
         &infra,
         &EngineOpts {
             args: &["--role", "worker", "--shadow"],
@@ -390,6 +391,9 @@ async fn shadow_expired_job_publishes_nothing() {
             env: &[],
         },
     );
+    assert!(e.wait_log("engine ready", STARTUP).await);
+    let (db, queue, id) = seed_job(&infra, Some(1)).await;
+    let mut sub = queue.subscribe(&id).await.unwrap();
     let mut r = infra.redis().await;
     let v = shadow_record(&mut r, &id).await;
     assert_eq!(v["verdict"], "internal_error", "{v}");
@@ -415,7 +419,9 @@ async fn shadow_expired_job_publishes_nothing() {
 async fn shadow_mode_writes_only_shadow_key() {
     let infra = infra().await;
     let judge = FakeJudge::start(&[]).await;
-    let (db, queue, id) = seed_job(&infra, None).await;
+    // Creates the schema and the Go group; the shadow group starts at the tail, so this
+    // earlier job is skipped and the real one is enqueued once the engine is ready.
+    seed_job(&infra, None).await;
 
     // The gateway cannot run in shadow mode.
     for role in ["all", "gateway"] {
@@ -442,6 +448,8 @@ async fn shadow_mode_writes_only_shadow_key() {
             env: &[],
         },
     );
+    assert!(e.wait_log("engine ready", STARTUP).await);
+    let (db, queue, id) = seed_job(&infra, None).await;
     let mut r = infra.redis().await;
     let key = format!("ac:shadow:{id}");
     let v = shadow_record(&mut r, &id).await;

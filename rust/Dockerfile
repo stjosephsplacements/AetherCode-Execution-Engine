@@ -7,7 +7,8 @@
 #     -t aethercode-exec-rs:dev .
 
 # ---- Dependency planner (cargo-chef): recipe.json only changes when manifests change ----
-FROM lukemathwalker/cargo-chef:latest-rust-1.99.1-bookworm AS chef
+# Pinned by digest; update it deliberately (docker buildx imagetools inspect <tag>).
+FROM lukemathwalker/cargo-chef:latest-rust-1.99.1-bookworm@sha256:022ee6109960abe8e3e34588f5ce1ba03d5005b03a489f7534dba9bc0c1fae76 AS chef
 WORKDIR /src/rust
 
 FROM chef AS planner

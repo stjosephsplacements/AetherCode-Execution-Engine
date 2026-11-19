@@ -24,6 +24,7 @@ struct Fake {
     version_calls: AtomicUsize,
     run_down: AtomicBool,
     version_probe_down: bool,
+    version_hangs: bool,
 }
 
 fn ok() -> RunResult {
@@ -100,6 +101,9 @@ impl Sandbox for Fake {
     }
     async fn version(&self) -> Result<String, Error> {
         self.version_calls.fetch_add(1, Ordering::SeqCst);
+        if self.version_hangs {
+            std::future::pending::<()>().await;
+        }
         let left = self.down_versions.load(Ordering::SeqCst);
         if left > 0 {
             self.down_versions.store(left - 1, Ordering::SeqCst);
@@ -195,6 +199,33 @@ async fn permanently_unreachable_sandbox_is_an_error() {
     assert!(matches!(err, Error::SandboxUnreachable), "{err}");
     assert!(started.elapsed() < Duration::from_secs(2));
     assert!(fake.version_calls.load(Ordering::SeqCst) >= 2);
+}
+
+#[tokio::test]
+async fn hung_version_call_is_bounded_by_the_budget() {
+    let fake = Fake {
+        version_hangs: true,
+        ..Fake::default()
+    };
+    let started = std::time::Instant::now();
+    let err = Registry::load_with_budget(&cfg(), &fake, Duration::from_millis(200))
+        .await
+        .unwrap_err();
+    assert!(matches!(err, Error::SandboxUnreachable), "{err}");
+    assert!(started.elapsed() < Duration::from_secs(2));
+}
+
+#[tokio::test]
+async fn failed_initial_probe_leaves_languages_unavailable_until_one_succeeds() {
+    let fake = Fake {
+        run_down: AtomicBool::new(true),
+        ..Fake::default()
+    };
+    let reg = Registry::load(&cfg(), &fake).await.unwrap();
+    assert!(reg.catalogue().iter().all(|s| !s.available));
+    fake.run_down.store(false, Ordering::SeqCst);
+    reg.refresh(&fake).await;
+    assert!(available(&reg, "python"));
 }
 
 #[tokio::test]

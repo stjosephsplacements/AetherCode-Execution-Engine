@@ -30,6 +30,9 @@ struct Ctx {
     samples: Mutex<Vec<Sample>>,
 }
 
+/// Longest a `Retry-After` is honoured, so a bad header cannot stall a student.
+const MAX_RETRY_AFTER_SECS: u64 = 30;
+
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
 }
@@ -37,8 +40,11 @@ fn ms(d: Duration) -> f64 {
 /// Runs the simulation and reports.
 ///
 /// # Errors
-/// When the HTTP clients cannot be built.
+/// When `students` is zero, the HTTP clients cannot be built, or a student task panics.
 pub async fn run(cfg: Config) -> Result<Report, String> {
+    if cfg.students == 0 {
+        return Err("students must be at least 1".to_owned());
+    }
     let post = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
         .connect_timeout(Duration::from_secs(5))
@@ -59,7 +65,7 @@ pub async fn run(cfg: Config) -> Result<Report, String> {
     });
     let start = Instant::now();
     let end = start + ctx.cfg.duration;
-    let n = ctx.cfg.students.max(1);
+    let n = ctx.cfg.students;
     let mut tasks = Vec::with_capacity(n);
     for i in 0..n {
         let c = ctx.clone();
@@ -81,7 +87,7 @@ pub async fn run(cfg: Config) -> Result<Report, String> {
         }));
     }
     for t in tasks {
-        let _ = t.await;
+        t.await.map_err(|e| format!("student task failed: {e}"))?;
     }
     let wall = start.elapsed();
     let samples = ctx.samples.lock().unwrap_or_else(|e| e.into_inner());
@@ -125,10 +131,20 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
             .send()
             .await
             .map_err(|e| format!("POST failed: {}", e.without_url()))?;
-        let code = r.status().as_u16();
-        if code == 429 || code >= 500 {
+        // Only 429 is retried: admission rejects before anything is enqueued. A 5xx may
+        // follow an accepted job, and a retry would create a duplicate.
+        if r.status().as_u16() == 429 {
             s.retries += 1;
-            tokio::time::sleep(Duration::from_millis(100 << attempt.min(5))).await;
+            let wait = r
+                .headers()
+                .get(reqwest::header::RETRY_AFTER)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .map_or_else(
+                    || Duration::from_millis(100 << attempt.min(5)),
+                    |secs| Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)),
+                );
+            tokio::time::sleep(wait).await;
             continue;
         }
         resp = Some(r);
@@ -189,4 +205,25 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
         .map_err(|_| "SSE timeout - no VERDICT".to_owned())??;
     s.verdict_ms = ms(t0.elapsed());
     Ok(verdict)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn zero_students_is_rejected_not_rounded_up() {
+        let cfg = Config {
+            url: "http://127.0.0.1:1".into(),
+            token: None,
+            students: 0,
+            languages: vec!["c".into()],
+            duration: Duration::from_secs(1),
+            ramp: Duration::ZERO,
+            think_min: Duration::ZERO,
+            think_max: Duration::ZERO,
+            timeout: Duration::from_secs(1),
+        };
+        assert!(run(cfg).await.is_err());
+    }
 }

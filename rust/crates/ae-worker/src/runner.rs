@@ -4,7 +4,7 @@
 //! concurrently under a per-job semaphore of [`job_width`] permits, so at most
 //! that many tests are in the sandbox at once.
 
-use crate::checker::{Program, evaluate_checker};
+use crate::checker::{PROGRAM_CPU, Program, evaluate_checker};
 use crate::interactor::interactive_cmds;
 use crate::{Bus, Error, Result};
 use ae_core::eventlog::{Event, EventType};
@@ -60,10 +60,16 @@ fn ns(v: u64) -> i64 {
 }
 
 /// Worst-case time a job needs: every test at its wall-clock limit plus the
-/// compile, plus slack. Tests usually overlap, so this is a safe upper bound.
-pub fn job_budget(lang: &Language, limits: &RunLimits, tests: usize) -> Duration {
+/// compile, plus slack. With a custom checker or interactor (`programs`) every test also
+/// gets one program run at its wall-clock limit. Tests usually overlap, so this is a safe
+/// upper bound.
+pub fn job_budget(lang: &Language, limits: &RunLimits, tests: usize, programs: bool) -> Duration {
     let (cpu, _) = lang.effective(limits);
-    let mut total = clock_limit(cpu).saturating_mul(u64::try_from(tests).unwrap_or(u64::MAX));
+    let mut per_test = clock_limit(cpu);
+    if programs {
+        per_test = per_test.saturating_add(clock_limit(PROGRAM_CPU));
+    }
+    let mut total = per_test.saturating_mul(u64::try_from(tests).unwrap_or(u64::MAX));
     if let Some(c) = &lang.compile {
         total = total.saturating_add(clock_limit(c.limits.cpu));
     }

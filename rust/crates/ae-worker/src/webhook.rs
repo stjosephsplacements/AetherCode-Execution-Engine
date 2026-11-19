@@ -17,7 +17,6 @@ const SIGNATURE_HEADER: &str = "X-AetherCode-Signature";
 const ATTEMPTS: u32 = 3;
 const BACKOFF: Duration = Duration::from_millis(500);
 const TIMEOUT: Duration = Duration::from_secs(5);
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone, Serialize)]
 pub struct WebhookPayload {
@@ -157,7 +156,6 @@ impl std::fmt::Debug for WebhookClient {
 fn builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(TIMEOUT)
-        .connect_timeout(CONNECT_TIMEOUT)
         // One-shot calls: keep no idle connections.
         .pool_max_idle_per_host(0)
         .redirect(reqwest::redirect::Policy::custom(|a| {

@@ -27,16 +27,19 @@ const HTTP_CLOSE: Duration = Duration::from_secs(5);
 /// Go's `scrapeQueueDepth` ticker.
 const QUEUE_SAMPLE: Duration = Duration::from_secs(15);
 const BUDGET_SAMPLE: Duration = Duration::from_secs(5);
-/// Slack on top of `AC_JOB_TIMEOUT` for one go-judge request.
+/// Slack on top of the job timeout for one go-judge request.
 const JUDGE_SLACK: Duration = Duration::from_secs(30);
+/// Floor of the job timeout used for the go-judge client, so a short or zero `AC_JOB_TIMEOUT`
+/// never cuts a legitimate compile (up to 41 s) that the worker's own deadlines still allow.
+const JUDGE_MIN_JOB: Duration = Duration::from_secs(90);
 /// The pre-warm command: present in every go-judge image, needs no toolchain.
 pub const PREWARM_ARGS: [&str; 3] = ["/usr/bin/test", "-x", "/usr/bin/test"];
 
-/// Overall timeout of one go-judge request: a job never waits longer than its own
-/// timeout plus slack for a single sandbox call.
+/// Overall timeout of one go-judge request: a hung-connection backstop, the job timeout (at
+/// least [`JUDGE_MIN_JOB`]) plus slack. The per-call deadlines in the worker are the real bound.
 #[must_use]
 pub fn judge_request_timeout(cfg: &Config) -> Duration {
-    cfg.job_timeout + JUDGE_SLACK
+    cfg.job_timeout.max(JUDGE_MIN_JOB) + JUDGE_SLACK
 }
 
 /// First SIGTERM/SIGINT cancels `token`; a second one exits at once with status 1.
@@ -134,10 +137,11 @@ async fn budget_gauge(worker: Worker) -> Result<(), String> {
 }
 
 /// Processes whatever is left in the legacy single stream (`AC_STREAM_NAME`). Stops
-/// reading on shutdown; jobs already read are finished.
+/// reading on shutdown; jobs already read are finished until [`DRAIN_GRACE`] after it.
 fn spawn_legacy_drain(queue: Queue, worker: Worker, token: CancellationToken) -> JoinHandle<()> {
     let (tx, mut rx) = mpsc::channel::<Delivery>(10);
     tokio::spawn(async move {
+        let stop = token.clone();
         let feed = async move {
             tokio::select! {
                 r = queue.drain_legacy(&tx) => match r {
@@ -149,7 +153,19 @@ fn spawn_legacy_drain(queue: Queue, worker: Worker, token: CancellationToken) ->
             }
         };
         let work = async move {
-            while let Some(d) = rx.recv().await {
+            let grace = async {
+                stop.cancelled().await;
+                tokio::time::sleep(DRAIN_GRACE).await;
+            };
+            tokio::pin!(grace);
+            loop {
+                let d = tokio::select! {
+                    () = &mut grace => break,
+                    d = rx.recv() => match d {
+                        Some(d) => d,
+                        None => break,
+                    },
+                };
                 let job_id = d.job_id.clone();
                 if let Err(e) = worker.process(d).await {
                     tracing::error!(job_id, error = %e, "queue: handler error");
@@ -224,7 +240,8 @@ pub async fn run(s: Settings) -> Result<(), String> {
         let sink = Sink::new(redis.clone());
         let mut qcfg = cfg.clone();
         qcfg.consumer_group = shadow::group(&cfg.consumer_group);
-        let q = Queue::connect(&qcfg, Arc::new(ShadowExpiry(sink.clone())))
+        // Tail, not history: a new shadow group must not recompute the retained stream.
+        let q = Queue::connect_at_tail(&qcfg, Arc::new(ShadowExpiry(sink.clone())))
             .await
             .map_err(|e| format!("redis stream group creation failed: {e}"))?
             .with_dead_letter_stream(shadow::DLQ_STREAM);
@@ -335,6 +352,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
 
     // Workers.
     let mut draining: Vec<JoinHandle<()>> = Vec::new();
+    let worker_exit = CancellationToken::new();
     if role.worker() {
         let (store, bus): (Arc<dyn Store>, Arc<dyn Bus>) = match sink {
             Some(sink) => (
@@ -364,7 +382,13 @@ pub async fn run(s: Settings) -> Result<(), String> {
                 token.clone(),
             ));
         }
-        draining.push(tokio::spawn(worker.run(token.clone())));
+        let exit = worker_exit.clone().drop_guard();
+        let run = worker.run(token.clone());
+        draining.push(tokio::spawn(async move {
+            // Fires on return or panic, so a worker loop dying alone is not silent.
+            let _exit = exit;
+            run.await;
+        }));
     }
 
     ready.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -377,6 +401,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
     let failure = tokio::select! {
         () = token.cancelled() => None,
         (name, why) = sup.failure() => Some(format!("{name}: {why}")),
+        () = worker_exit.cancelled() => Some("worker: loop exited".to_owned()),
         r = finished(&mut debug) => Some(format!("metrics server: {r}")),
         r = finished(&mut http) => Some(format!("public server: {r}")),
     };
@@ -427,9 +452,15 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
-    fn judge_timeout_follows_job_timeout() {
-        let m: HashMap<String, String> = [("AC_JOB_TIMEOUT".to_owned(), "10s".to_owned())].into();
-        let cfg = Config::from_map(&m).unwrap();
-        assert_eq!(judge_request_timeout(&cfg), Duration::from_secs(40));
+    fn judge_timeout_follows_job_timeout_above_the_floor() {
+        for (job, want) in [("10s", 120), ("0s", 120), ("300s", 330)] {
+            let m: HashMap<String, String> = [("AC_JOB_TIMEOUT".to_owned(), job.to_owned())].into();
+            let cfg = Config::from_map(&m).unwrap();
+            assert_eq!(
+                judge_request_timeout(&cfg),
+                Duration::from_secs(want),
+                "{job}"
+            );
+        }
     }
 }

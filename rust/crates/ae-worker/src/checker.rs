@@ -77,6 +77,11 @@ pub async fn prepare_program(
         .get(lang)
         .cloned()
         .ok_or_else(|| Error::Other(format!("unsupported {kind} language: {lang}")))?;
+    if language.placement.stdin_is_source {
+        return Err(Error::Other(format!(
+            "{lang} reads its source from stdin and cannot be a {kind} language"
+        )));
+    }
     let version = registry.toolchain_version(lang).unwrap_or_default();
     let key = CacheKey::new(code, &format!("{kind}:{lang}"), &[], &version);
     let mut program = Program {
@@ -99,9 +104,7 @@ pub async fn prepare_program(
             }
             Err(e) => return Err(Error::Other(format!("compile {kind}: {e}"))),
         });
-    } else if !lang.placement.stdin_is_source
-        && let Some(src) = lang.placement.source.as_deref()
-    {
+    } else if let Some(src) = lang.placement.source.as_deref() {
         let (sb, name, bytes) = (sandbox.clone(), file_name(src).to_owned(), code.to_owned());
         let upload = async move {
             tokio::time::timeout(UPLOAD_TIMEOUT, sb.cache_file(&name, bytes.as_bytes()))

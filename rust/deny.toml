@@ -1,7 +1,9 @@
 [advisories]
 version = 2
 yanked = "deny"
-# None of these is in the shipped binary (checked with `cargo tree -i <crate> -e normal,build`).
+# The first three are not in the shipped binary (checked with `cargo tree -i <crate> -e normal,build`).
+# The rest are unmaintained-crate notices, not vulnerabilities, for crates that can ship (chrono is a
+# direct dependency of the engine; humantime also serves the loadgen tool); each is revisited on upgrade.
 ignore = [
   { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys is only in Cargo.lock (an optional sqlx driver); it is not in the dependency graph" },
   { id = "RUSTSEC-2023-0071", reason = "rsa is a dev-dependency of ae-gateway (test JWT keys); the engine does not ship it" },

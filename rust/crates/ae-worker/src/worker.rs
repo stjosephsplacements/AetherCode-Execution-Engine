@@ -278,7 +278,9 @@ impl Worker {
             .scheduler
             .acquire(job_cost(&lang, &limits, set.tests.len()))
             .await;
-        let budget = job_budget(&lang, &limits, set.tests.len()).max(inner.opts.job_timeout);
+        let programs = !set.checker_code.is_empty() || !set.interactor_code.is_empty();
+        let budget =
+            job_budget(&lang, &limits, set.tests.len(), programs).max(inner.opts.job_timeout);
         let deadline = Instant::now() + budget;
 
         let mut binary: Option<CachedFile> = None;
@@ -468,22 +470,38 @@ impl Worker {
     ) -> Result<crate::runner::Outcome> {
         let inner = &*self.inner;
         let set = &spec.set;
+        if !set.interactor_code.is_empty() && lang.placement.stdin_is_source {
+            return Err(Error::Other(format!(
+                "{} reads its source from stdin and cannot run interactively",
+                lang.id
+            )));
+        }
         let custom = if set.checker_code.is_empty() {
             None
         } else {
             Some(
-                self.program("checker", &set.checker_language, &set.checker_code)
-                    .await
-                    .map_err(|e| Error::Other(format!("custom checker setup: {e}")))?,
+                self.program_by(
+                    deadline,
+                    "checker",
+                    &set.checker_language,
+                    &set.checker_code,
+                )
+                .await
+                .map_err(|e| Error::Other(format!("custom checker setup: {e}")))?,
             )
         };
         let interactor = if set.interactor_code.is_empty() {
             None
         } else {
             Some(
-                self.program("interactor", &set.interactor_language, &set.interactor_code)
-                    .await
-                    .map_err(|e| Error::Other(format!("interactor setup: {e}")))?,
+                self.program_by(
+                    deadline,
+                    "interactor",
+                    &set.interactor_language,
+                    &set.interactor_code,
+                )
+                .await
+                .map_err(|e| Error::Other(format!("interactor setup: {e}")))?,
             )
         };
         let run = RunSpec {
@@ -504,17 +522,27 @@ impl Worker {
         run_tests(&run, &set.tests).await
     }
 
-    async fn program(&self, kind: &str, lang: &str, code: &str) -> Result<Program> {
+    /// [`prepare_program`] bounded by the job deadline, so a hung upload or compile cannot
+    /// hold the scheduler permit past the job budget.
+    async fn program_by(
+        &self,
+        deadline: Instant,
+        kind: &str,
+        lang: &str,
+        code: &str,
+    ) -> Result<Program> {
         let inner = &*self.inner;
-        prepare_program(
+        let prepare = prepare_program(
             &inner.cache,
             &inner.sandbox,
             &inner.registry,
             kind,
             lang,
             code,
-        )
-        .await
+        );
+        tokio::time::timeout_at(deadline, prepare)
+            .await
+            .map_err(|_| Error::Other(format!("{kind} setup exceeded the job deadline")))?
     }
 
     /// Loads the submission and moves it to running so the orphan reaper leaves it

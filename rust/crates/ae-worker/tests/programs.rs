@@ -85,6 +85,35 @@ async fn custom_checker_compiles_once_and_judges_by_exit_status() {
 }
 
 #[tokio::test]
+async fn stdin_source_languages_cannot_be_checkers_or_interactors() {
+    // The fake echoes stdin; sqlite's self-test needs "hello", so answer it explicitly.
+    let sb = Arc::new(FakeSandbox::default());
+    sb.set_hook(|c| {
+        (c.args[0] == "/usr/bin/sqlite3").then(|| {
+            let mut r = RunResult {
+                status: STATUS_ACCEPTED.into(),
+                ..RunResult::default()
+            };
+            r.files.insert("stdout".into(), "hello".into());
+            r
+        })
+    });
+    let reg = common::registry(&sb).await;
+    let cache = CompileCache::new(
+        sb.clone() as Arc<dyn Sandbox>,
+        Duration::from_secs(300),
+        1 << 30,
+    );
+    let sbd: Arc<dyn Sandbox> = sb.clone();
+    for kind in ["checker", "interactor"] {
+        let err = prepare_program(&cache, &sbd, &reg, kind, "sqlite", "SELECT 1;")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("stdin"), "{err}");
+    }
+}
+
+#[tokio::test]
 async fn checker_status_mapping() {
     let (sb, reg, cache) = setup().await;
     let sbd: Arc<dyn Sandbox> = sb.clone();
@@ -398,5 +427,11 @@ async fn job_budget_covers_every_test_at_its_clock_limit() {
     let want = Duration::from_secs(20 * 13)
         + Duration::from_nanos(ae_sandbox::clock_limit(compile_cpu))
         + Duration::from_secs(15);
-    assert_eq!(job_budget(java, &limits, 20), want);
+    assert_eq!(job_budget(java, &limits, 20, false), want);
+    // A checker or interactor adds one program run per test.
+    let program_clock = Duration::from_nanos(ae_sandbox::clock_limit(5_000_000_000));
+    assert_eq!(
+        job_budget(java, &limits, 20, true),
+        want + program_clock * 20
+    );
 }

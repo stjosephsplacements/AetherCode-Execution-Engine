@@ -101,6 +101,23 @@ async fn a_cancelled_waiter_neither_blocks_the_queue_nor_leaks_budget() {
     assert_eq!(s.available(), s.budget());
 }
 
+#[tokio::test]
+async fn cancelling_a_blocked_head_admits_the_waiters_behind_it() {
+    let s = Scheduler::new(cost(2_000, u64::MAX));
+    let _held = s.acquire(cost(1_000, 0)).await;
+    let s2 = s.clone();
+    let head = tokio::spawn(async move { s2.acquire(cost(2_000, 0)).await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    let s3 = s.clone();
+    let small = tokio::spawn(async move { s3.acquire(cost(1_000, 0)).await });
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    head.abort();
+    tokio::time::timeout(Duration::from_secs(1), small)
+        .await
+        .expect("the waiter behind a cancelled head stayed blocked")
+        .unwrap();
+}
+
 #[test]
 fn budget_is_derived_from_workers_and_memory() {
     let cfg = ae_core::Config::from_map(

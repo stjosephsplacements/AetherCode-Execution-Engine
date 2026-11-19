@@ -35,6 +35,15 @@ struct Answer {
     version: String,
 }
 
+impl Answer {
+    fn unavailable() -> Self {
+        Self {
+            available: false,
+            version: String::new(),
+        }
+    }
+}
+
 /// Self-test result. `Error` means the sandbox could not be asked.
 enum Outcome {
     Pass(String),
@@ -77,12 +86,14 @@ impl Registry {
     }
 
     /// Re-runs the probes and self-tests. A probe that errors keeps the previous
-    /// answer: a failed probe is not a missing toolchain.
+    /// answer: a failed probe is not a missing toolchain. A language with no answer yet stays
+    /// unavailable until a probe succeeds, so startup never accepts jobs it cannot run.
     pub async fn refresh(&self, sb: &dyn Sandbox) {
         let present = match probe_languages(sb, &self.languages).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(error = %e, "sandbox: language probe failed; keeping the last answer");
+                self.mark_unanswered_unavailable();
                 return;
             }
         };
@@ -105,17 +116,26 @@ impl Registry {
                 },
                 Outcome::Fail(reason) => {
                     tracing::warn!(language = %id, %reason, "sandbox: language unavailable");
-                    Answer {
-                        available: false,
-                        version: String::new(),
-                    }
+                    Answer::unavailable()
                 }
                 Outcome::Error(reason) => {
                     tracing::warn!(language = %id, %reason, "sandbox: language self-test errored; keeping the last answer");
+                    answers
+                        .entry(id.to_owned())
+                        .or_insert_with(Answer::unavailable);
                     continue;
                 }
             };
             answers.insert(id.to_owned(), answer);
+        }
+    }
+
+    fn mark_unanswered_unavailable(&self) {
+        let mut answers = self.answers.write().unwrap_or_else(PoisonError::into_inner);
+        for (id, _) in self.languages.iter() {
+            answers
+                .entry(id.to_owned())
+                .or_insert_with(Answer::unavailable);
         }
     }
 
@@ -182,7 +202,15 @@ async fn wait_for_sandbox(sb: &dyn Sandbox, budget: Duration) -> Result<(), Erro
     let start = Instant::now();
     let mut delay = BACKOFF_START;
     loop {
-        match sb.version().await {
+        let left = budget.saturating_sub(start.elapsed());
+        let attempt = match tokio::time::timeout(left, sb.version()).await {
+            Ok(r) => r,
+            Err(_) => {
+                tracing::error!("sandbox: go-judge did not answer within the startup budget");
+                return Err(Error::SandboxUnreachable);
+            }
+        };
+        match attempt {
             Ok(_) => return Ok(()),
             Err(e) => {
                 if start.elapsed() + delay > budget {
@@ -215,6 +243,12 @@ async fn self_test(sb: &dyn Sandbox, lang: &Language, caps: OutputCaps) -> Outco
             Some(id) if r.status == STATUS_ACCEPTED => file_id = Some(FileId(id.clone())),
             _ => {
                 let stderr = r.files.get("stderr").map_or("", String::as_str);
+                // go-judge may still hold a binary from a failed compile.
+                for id in r.file_ids.values() {
+                    if let Err(e) = sb.delete_file(FileId(id.clone())).await {
+                        tracing::warn!(language = %lang.id, error = %e, "sandbox: release failed self-test binary");
+                    }
+                }
                 return Outcome::Fail(format!("compile: {} {}", r.status, stderr.trim()));
             }
         }

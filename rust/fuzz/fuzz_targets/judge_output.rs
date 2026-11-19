@@ -12,8 +12,11 @@ fuzz_target!(|data: &[u8]| {
         1 => Checker::Token,
         _ => Checker::Float,
     };
-    let mid = rest.windows(2).position(|w| w == [0xFF, 0xFF]).unwrap_or(rest.len() / 2);
+    let sep = rest.windows(2).position(|w| w == [0xFF, 0xFF]);
+    let mid = sep.unwrap_or(rest.len() / 2);
     let (expected, actual) = rest.split_at(mid);
+    // Without this the separator would prefix `actual` and the match path is rarely reached.
+    let actual = if sep.is_some() { &actual[2..] } else { actual };
     let _ = judge_output(checker, actual, expected);
     // Reflexive for the exact and token checkers; float is excluded because NaN never matches.
     if checker != Checker::Float {

@@ -60,7 +60,7 @@ func main() { fmt.Println("hello") }
 '''
 [languages.go.compile_cmd]
 args = ["/usr/bin/go", "build", "-o", "/w/main", "/w/main.go"]
-env = ["PATH=/usr/bin:/bin", "GOROOT=/usr/lib/go-1.22", "HOME=/tmp", "GOCACHE=/tmp/go-cache"]
+env = ["PATH=/usr/bin:/bin", "HOME=/tmp", "GOCACHE=/tmp/go-cache"]
 limits = { cpu = 30_000_000_000, memory = 1_073_741_824, procs = 512 }
 [languages.go.execute_cmd]
 args = ["/w/main"]

@@ -8,7 +8,10 @@ use serde::Serialize;
 use std::future::Future;
 use std::time::Duration;
 
-const RUN_RESPONSE_MAX: usize = 16 << 20;
+/// Smallest `/run` response cap; a batch that asks for more output gets a larger one.
+const RUN_RESPONSE_MIN: usize = 16 << 20;
+/// Worst-case JSON growth of collected output (invalid UTF-8 becomes three-byte U+FFFD).
+const OUTPUT_EXPANSION: usize = 3;
 const SMALL_RESPONSE_MAX: usize = 1 << 16;
 const ERROR_BODY_MAX: usize = 4096;
 
@@ -104,6 +107,20 @@ impl GoJudge {
     }
 }
 
+/// Cap on one `/run` response: what the batch's output collectors may legitimately return,
+/// so large but permitted outputs come back as per-test verdicts instead of `TooLarge`.
+fn run_response_limit(cmds: &[Cmd]) -> usize {
+    let collected: u64 = cmds
+        .iter()
+        .flat_map(|c| &c.files)
+        .filter_map(|f| f.max)
+        .sum();
+    usize::try_from(collected)
+        .unwrap_or(usize::MAX)
+        .saturating_mul(OUTPUT_EXPANSION)
+        .max(RUN_RESPONSE_MIN)
+}
+
 async fn read_limited(resp: &mut Response, limit: usize) -> Result<Vec<u8>, Error> {
     let mut buf = Vec::new();
     while let Some(chunk) = resp.chunk().await? {
@@ -154,7 +171,7 @@ impl Sandbox for GoJudge {
                 cmd: &cmds,
                 pipe_mapping: &pipes,
             });
-        let body = self.send(rb, RUN_RESPONSE_MAX).await?;
+        let body = self.send(rb, run_response_limit(&cmds)).await?;
         let results: Vec<RunResult> = serde_json::from_slice(&body)?;
         if results.len() != cmds.len() {
             return Err(Error::ResultCount {
@@ -198,5 +215,28 @@ impl Sandbox for GoJudge {
         let rb = self.http.get(format!("{}/version", self.base_url));
         let body = self.send(rb, SMALL_RESPONSE_MAX).await?;
         Ok(serde_json::from_slice::<Ver>(&body)?.build_version)
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+    use crate::CmdFile;
+
+    #[test]
+    fn response_cap_covers_the_batch_output_limits() {
+        let cmd = Cmd {
+            files: vec![
+                CmdFile::collector("stdout", 8 << 20),
+                CmdFile::collector("stderr", 1 << 20),
+            ],
+            ..Cmd::default()
+        };
+        assert_eq!(run_response_limit(&[]), RUN_RESPONSE_MIN);
+        let batch = vec![cmd; 32];
+        assert_eq!(
+            run_response_limit(&batch),
+            32 * (9 << 20) * OUTPUT_EXPANSION
+        );
     }
 }

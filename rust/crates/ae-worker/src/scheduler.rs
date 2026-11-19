@@ -99,6 +99,21 @@ fn grant(shared: &Arc<Shared>, st: &mut State) {
     }
 }
 
+/// A queued `acquire`. Dropping it unfinished (the caller was cancelled) closes the channel and
+/// re-runs admission, so waiters behind it that now fit are not left blocked.
+struct Waiting<'a> {
+    rx: oneshot::Receiver<Permit>,
+    shared: &'a Arc<Shared>,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        self.rx.close();
+        let mut st = self.shared.lock();
+        grant(self.shared, &mut st);
+    }
+}
+
 impl Scheduler {
     pub fn new(budget: Cost) -> Self {
         Self {
@@ -148,7 +163,11 @@ impl Scheduler {
             st.waiters.push_back(Waiter { cost, tx });
             rx
         };
-        match rx.await {
+        let mut waiting = Waiting {
+            rx,
+            shared: &self.shared,
+        };
+        match (&mut waiting.rx).await {
             Ok(p) => p,
             // The sender lives in our own queue, which outlives this call.
             Err(_) => Permit {

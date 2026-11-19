@@ -54,6 +54,8 @@ const DENIED_ENV_KEYS: &[&str] = &[
     "GOMEMLIMIT",
     "GOMAXPROCS",
     "GOTRACEBACK",
+    // Redirects the Go toolchain. The compile env no longer sets it, so it is denied explicitly.
+    "GOROOT",
 ];
 
 /// Resource limits of one command: CPU time (ns), memory (bytes), processes.
@@ -146,7 +148,7 @@ impl Language {
         let memory = if limits.memory != 0 {
             limits.memory.max(l.min_memory)
         } else {
-            l.memory
+            l.memory.max(l.min_memory)
         };
         (cpu, memory)
     }
