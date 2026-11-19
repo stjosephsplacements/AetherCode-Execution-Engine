@@ -16,7 +16,7 @@
 //! inflated while the engine is still compiling the first copy (the engine collapses the
 //! concurrent compiles into one). The engine's compile cache survives between runs, so
 //! restart the engine between repeats or the next run starts warm and its cold numbers are
-//! meaningless. POST retries (429/5xx) are counted in `post_retries`, are not errors, and
+//! meaningless. POST retries (429 only) are counted in `post_retries`, are not errors, and
 //! are excluded from the ingestion latency (but not from submit-to-verdict).
 
 mod client;

@@ -401,7 +401,10 @@ pub async fn run(s: Settings) -> Result<(), String> {
     let failure = tokio::select! {
         () = token.cancelled() => None,
         (name, why) = sup.failure() => Some(format!("{name}: {why}")),
-        () = worker_exit.cancelled() => Some("worker: loop exited".to_owned()),
+        // Ignored once shutdown was requested: workers then exit on purpose.
+        () = worker_exit.cancelled() => {
+            (!token.is_cancelled()).then(|| "worker: loop exited".to_owned())
+        }
         r = finished(&mut debug) => Some(format!("metrics server: {r}")),
         r = finished(&mut http) => Some(format!("public server: {r}")),
     };

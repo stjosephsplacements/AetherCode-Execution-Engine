@@ -245,14 +245,15 @@ async fn custom_checker_calls_respect_the_job_deadline() {
         },
     );
     // Each sandbox call takes 30s of virtual time; the test batch plus three sequential
-    // checker calls (120s) overrun the job budget (3 x (1.2s + 11s) + 15s = 51.6s).
+    // checker calls (120s) overrun the job budget (3 x (1.2s + 11s) + 15s = 51.6s); the run
+    // must end at the budget, not at the end of the calls.
     *h.sb.run_delay.lock().unwrap() = Duration::from_secs(30);
     let mut opts = h.options();
     opts.job_timeout = Duration::from_secs(1);
     let start = tokio::time::Instant::now();
     h.worker_with(opts).process(delivery(&j)).await.unwrap();
     assert!(
-        start.elapsed() < Duration::from_secs(70),
+        start.elapsed() < Duration::from_secs(55),
         "ran past the deadline: {:?}",
         start.elapsed()
     );

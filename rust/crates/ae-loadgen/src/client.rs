@@ -30,6 +30,8 @@ struct Ctx {
     samples: Mutex<Vec<Sample>>,
 }
 
+/// POST attempts per submission (the first plus retries after 429).
+const MAX_POST_ATTEMPTS: u32 = 8;
 /// Longest a `Retry-After` is honoured, so a bad header cannot stall a student.
 const MAX_RETRY_AFTER_SECS: u64 = 30;
 
@@ -124,7 +126,7 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
     let t0 = Instant::now();
     let mut resp = None;
     let mut post_start = t0;
-    for attempt in 0..8u32 {
+    for attempt in 0..MAX_POST_ATTEMPTS {
         post_start = Instant::now();
         let r = authed(c, c.post.post(format!("{}/api/v1/execute", c.cfg.url)))
             .json(&payload)
@@ -144,7 +146,9 @@ async fn drive(c: &Ctx, t: &Template, s: &mut Sample) -> Result<String, String> 
                     || Duration::from_millis(100 << attempt.min(5)),
                     |secs| Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS)),
                 );
-            tokio::time::sleep(wait).await;
+            if attempt + 1 < MAX_POST_ATTEMPTS {
+                tokio::time::sleep(wait).await;
+            }
             continue;
         }
         resp = Some(r);

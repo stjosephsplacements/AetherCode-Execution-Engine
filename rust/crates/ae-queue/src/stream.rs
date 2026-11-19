@@ -79,11 +79,17 @@ impl Queue {
     /// Fails on a Redis error.
     pub async fn oldest_age(&self, stream: &str) -> Result<Duration> {
         let mut conn = self.conn.clone();
-        let groups: StreamInfoGroupsReply = redis::cmd("XINFO")
+        let groups: StreamInfoGroupsReply = match redis::cmd("XINFO")
             .arg("GROUPS")
             .arg(stream)
             .query_async(&mut conn)
-            .await?;
+            .await
+        {
+            Ok(g) => g,
+            // No stream yet: nothing is waiting.
+            Err(e) if e.to_string().contains("no such key") => return Ok(Duration::ZERO),
+            Err(e) => return Err(e.into()),
+        };
         let Some(g) = groups.groups.iter().find(|g| g.name == self.group) else {
             return Ok(Duration::ZERO);
         };

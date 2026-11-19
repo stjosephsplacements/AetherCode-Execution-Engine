@@ -137,7 +137,7 @@ Not yet run: the measured 200-student comparison is in "Results: 2026-11-19, 200
 | 1000 | Rust | cold | | | | | | |
 | 1000 | Rust | warm | | | | | | |
 
-Shadow parity result (`compared/matched/diff/pending/ignored/unreadable/skipped_since`): the 2026-11-19 run against the production Go engine compared 21 and matched 21 with 0 diffs (C, C++, Python, Java); the other counters were not recorded.
+Shadow parity result (`compared/matched/diff/pending/ignored/unreadable/skipped_since`): a separate run on 2026-11-19 against the production Go engine (not the c, cpp, python load below) compared 21 and matched 21 with 0 diffs, across C, C++, Python and Java; the other counters were not recorded.
 
 ## Smoke test (not a benchmark)
 

@@ -13,7 +13,7 @@ pub struct Sample {
     pub ingest_ms: f64,
     pub verdict_ms: f64,
     pub cold: bool,
-    /// POST attempts that were answered 429 or 5xx and retried.
+    /// POST attempts that were answered 429 and retried.
     pub retries: u32,
     pub error: Option<String>,
 }
@@ -68,7 +68,7 @@ pub struct Report {
     pub error_rate: f64,
     /// mismatched / completed
     pub mismatch_rate: f64,
-    /// Total POST retries after 429/5xx. Reported apart from `error_rate`: a retried
+    /// Total POST retries after 429. Reported apart from `error_rate`: a retried
     /// submission that then succeeds is not an error and its retry wait is not in `ingest`.
     pub post_retries: usize,
     /// Submissions that needed at least one retry.
@@ -190,7 +190,7 @@ impl Report {
         );
         let _ = writeln!(
             o,
-            "  POST retries:       {} in {} submissions (429/5xx, not counted as errors)",
+            "  POST retries:       {} in {} submissions (429, not counted as errors)",
             self.post_retries, self.retried_submissions
         );
         let _ = writeln!(o, "  Wall time:          {} ms", self.wall_time_ms);
