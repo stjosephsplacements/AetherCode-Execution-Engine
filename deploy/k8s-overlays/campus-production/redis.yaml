@@ -42,7 +42,7 @@ spec:
         - name: redis
           image: redis:7.4-alpine
           imagePullPolicy: IfNotPresent
-          args: ["redis-server", "--requirepass", "$(REDIS_PASSWORD)", "--appendonly", "yes"]
+          command: ["sh", "-c", "exec redis-server --requirepass \"$REDIS_PASSWORD\" --appendonly yes"]
           env:
             - name: REDIS_PASSWORD
               valueFrom:
@@ -80,7 +80,7 @@ metadata:
   labels:
     app.kubernetes.io/name: aethercode-exec-redis
 spec:
-  clusterIP: None
+  # ClusterIP (not headless): engine Config uses aethercode-exec-redis:6379
   selector:
     app.kubernetes.io/name: aethercode-exec-redis
   ports:
