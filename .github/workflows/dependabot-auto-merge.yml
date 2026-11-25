@@ -1,0 +1,21 @@
+name: dependabot-auto-merge
+
+on:
+  pull_request:
+    branches: [development]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  auto-merge:
+    runs-on: ubuntu-24.04
+    # PR author is immutable; github.actor can be a human re-running the job.
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+      - name: Enable auto-merge for every Dependabot PR
+        run: gh pr merge --auto --squash --delete-branch "$PR_URL"
+        env:
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

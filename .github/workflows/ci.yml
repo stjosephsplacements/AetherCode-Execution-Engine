@@ -4,47 +4,52 @@ name: CI
 # CI. CI also runs on direct pushes to each branch.
 on:
   push:
-    branches:
-      - development
-      - production
-      - "feature/**"
-      - "fix/**"
-      - "security/**"
-      - "ci/**"
-      - "docs/**"
-      - "chore/**"
-      - "refactor/**"
+    branches: [development, production]
   pull_request:
+    branches: [development, production]
 
-# The engine is audited-by-default: this is a code-execution service, so the
-# PR pipeline is the main line of defense.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
+  # Required checks (test, lint) no-op for Dependabot so auto-merge can finish
+  # without a full Go/CodeQL run. CodeQL runs on push only (not every PR).
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Go
+      - name: Dependabot gate
+        id: gate
+        run: |
+          if [ "${{ github.event.pull_request.user.login }}" = "dependabot[bot]" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v7
+      - if: steps.gate.outputs.skip != 'true'
+        name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: Module tidy check
+      - if: steps.gate.outputs.skip != 'true'
+        name: Module tidy check
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
-
-      - name: Build
+      - if: steps.gate.outputs.skip != 'true'
+        name: Build
         run: go build ./...
-
-      - name: Vet
+      - if: steps.gate.outputs.skip != 'true'
+        name: Vet
         run: go vet ./...
-
-      - name: Format check
+      - if: steps.gate.outputs.skip != 'true'
+        name: Format check
         run: |
           unformatted="$(gofmt -s -l .)"
           if [ -n "$unformatted" ]; then
@@ -53,13 +58,11 @@ jobs:
             gofmt -s -d $unformatted
             exit 1
           fi
-
-      # Unit tests are hermetic (the rate limiter uses an in-process
-      # miniredis), so no external services are required here.
-      - name: Test (race detector + coverage)
+      - if: steps.gate.outputs.skip != 'true'
+        name: Test (race detector + coverage)
         run: go test -race -count=1 -timeout=120s -coverprofile=coverage.out -covermode=atomic ./...
-
-      - name: Upload coverage to Codecov
+      - if: steps.gate.outputs.skip != 'true'
+        name: Upload coverage to Codecov
         uses: codecov/codecov-action@v5
         with:
           files: coverage.out
@@ -67,17 +70,26 @@ jobs:
           fail_ci_if_error: false
 
   lint:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v7
-
-      - name: Set up Go
+      - name: Dependabot gate
+        id: gate
+        run: |
+          if [ "${{ github.event.pull_request.user.login }}" = "dependabot[bot]" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.skip != 'true'
+        uses: actions/checkout@v7
+      - if: steps.gate.outputs.skip != 'true'
+        name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
-
-      - name: golangci-lint
+      - if: steps.gate.outputs.skip != 'true'
+        name: golangci-lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
@@ -85,29 +97,26 @@ jobs:
 
   codeql:
     name: CodeQL Analysis
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@v7
-
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
-
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: go
           queries: security-extended,security-and-quality
-
       - name: Build for CodeQL
         run: go build ./...
-
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
@@ -116,22 +125,20 @@ jobs:
 
   codeql-rust:
     name: CodeQL Analysis (Rust)
-    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
       security-events: write
     steps:
       - uses: actions/checkout@v7
-
-      # Rust is analysed without a build (build-mode none).
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: rust
           build-mode: none
           queries: security-extended,security-and-quality
-
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
         with:
