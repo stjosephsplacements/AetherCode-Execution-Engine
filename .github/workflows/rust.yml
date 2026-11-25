@@ -4,14 +4,26 @@ on:
   push:
     branches: [development, production]
     paths:
-      - "rust/**"
+      - "crates/**"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - "Dockerfile.rs"
       - "migrations/**"
       - ".dockerignore"
       - ".github/workflows/rust.yml"
   pull_request:
     branches: [development, production]
     paths:
-      - "rust/**"
+      - "crates/**"
+      - "fuzz/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "rust-toolchain.toml"
+      - "deny.toml"
+      - "Dockerfile.rs"
       - "migrations/**"
       - ".dockerignore"
       - ".github/workflows/rust.yml"
@@ -26,9 +38,6 @@ jobs:
   rust:
     if: github.event.pull_request.user.login != 'dependabot[bot]'
     runs-on: ubuntu-24.04
-    defaults:
-      run:
-        working-directory: rust
     steps:
       - uses: actions/checkout@v7
 
@@ -41,8 +50,8 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            rust/target
-          key: cargo-${{ runner.os }}-${{ hashFiles('rust/rust-toolchain.toml', 'rust/**/Cargo.toml', 'rust/Cargo.lock') }}
+            target
+          key: cargo-${{ runner.os }}-${{ hashFiles('rust-toolchain.toml', '**/Cargo.toml', 'Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-
 
       - name: Format
@@ -71,7 +80,7 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Build image
-        run: docker build -f rust/Dockerfile --build-arg COMMIT_SHA="${GITHUB_SHA}" -t aethercode-exec-rs:ci .
+        run: docker build -f Dockerfile.rs --build-arg COMMIT_SHA="${GITHUB_SHA}" -t aethercode-exec-rs:ci .
 
       - name: Smoke test
         run: docker run --rm aethercode-exec-rs:ci --help

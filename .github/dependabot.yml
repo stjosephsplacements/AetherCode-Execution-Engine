@@ -19,7 +19,7 @@ updates:
         patterns: ["*"]
 
   - package-ecosystem: cargo
-    directory: /rust
+    directory: /
     schedule:
       interval: weekly
       day: monday

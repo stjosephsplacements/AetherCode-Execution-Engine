@@ -7,13 +7,14 @@ This follows the [agents.md](https://agents.md) convention. `CLAUDE.md` referenc
 
 ## Project Snapshot
 
-A high-performance, multi-tenant code execution engine written in Go, acting as the pure execution backend for the AetherCode platform:
+A high-performance, multi-tenant code execution engine (Rust + Go dual stack after the Pure-Go migration), acting as the pure execution backend for the AetherCode platform:
 
-- **Ingest (`internal/gateway`)**: Exposes `POST /api/v1/execute`, `GET /api/v1/stream` (SSE), `GET /api/v1/submissions/{id}`, `DELETE /api/v1/submissions/{id}`, and `GET /api/v1/health`.
-- **Queue (`internal/queue`)**: Redis 7 Streams with a `DualConsumer` (weighted fair queue), poison-message dead-lettering, stream reclaimer, and orphan reaper.
-- **Worker (`internal/worker`)**: Language-aware compilation with an in-memory SHA-256 compile cache and batched test execution (up to 32 tests per `/run`).
-- **Sandbox (`internal/sandbox`)**: Go client communicating with `go-judge` (cgroups v2 + Linux namespaces + seccomp sandbox).
-- **Persistence (`internal/db`)**: PostgreSQL 18 with embedded migrations (`migrations/`), advisory locking, row-level security (RLS), and idempotency.
+- **Rust (`crates/`, `Dockerfile.rs`)**: Forward-path rewrite (`ae-engine` binary `engine`) — same HTTP API, Redis streams, Postgres migrations, and Prometheus names; runs beside Go via shadow/cutover.
+- **Go ingest (`internal/gateway`)**: `POST /api/v1/execute`, `GET /api/v1/stream` (SSE), `GET /api/v1/submissions/{id}`, `DELETE /api/v1/submissions/{id}`, `GET /api/v1/health`.
+- **Queue (`internal/queue` / `ae-queue`)**: Redis 7 Streams with weighted fair consume, poison-message dead-lettering, stream reclaimer, and orphan reaper.
+- **Worker (`internal/worker` / `ae-worker`)**: Language-aware compilation with SHA-256 compile cache and batched test execution (up to 32 tests per `/run`).
+- **Sandbox (`internal/sandbox` / `ae-sandbox`)**: Client for `go-judge` (cgroups v2 + Linux namespaces + seccomp).
+- **Persistence (`internal/db` / `ae-db`)**: PostgreSQL 18 with shared embedded migrations (`migrations/`), advisory locking, RLS, and idempotency.
 
 ---
 
@@ -48,7 +49,9 @@ gofmt -s -w .
 golangci-lint run ./...
 ```
 
-### Rust engine (`rust/`, run from `rust/`; toolchain pinned in `rust-toolchain.toml`)
+### Rust engine (workspace at repo root; toolchain pinned in `rust-toolchain.toml`)
+
+Dual-engine repo after the Pure-Go → Rust+Go migration: Rust (`crates/`, `Dockerfile.rs`) is the forward path; Go (`cmd/`, `internal/`, `Dockerfile`) stays live through shadow and cutover — do not remove or break it.
 
 ```bash
 cargo fmt --all -- --check
@@ -56,16 +59,13 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace            # integration tests start Postgres/Redis via Docker (testcontainers)
 cargo deny check && cargo audit
 
-# Fuzz (cargo-fuzz, nightly): targets in rust/fuzz/fuzz_targets
+# Fuzz (cargo-fuzz, nightly): targets in fuzz/fuzz_targets
 cargo +nightly fuzz run normalize_output -- -max_total_time=30
 cargo +nightly fuzz run judge_output -- -max_total_time=30
 
-# Image and compose profiles (run from the repository root: the build context needs migrations/)
-cd .. && docker build -f rust/Dockerfile -t aethercode-exec-rs:dev .
+docker build -f Dockerfile.rs -t aethercode-exec-rs:dev .
 docker compose --profile rust up --build engine-rs
 ```
-
-The Go engine stays in service through shadow and cutover: do not remove or break the Go code, image or manifests.
 
 ---
 

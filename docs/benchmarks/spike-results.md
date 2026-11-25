@@ -145,8 +145,4 @@ Go compilation failed on ~70% of rapid sequential benchmark iterations (14/20). 
 
 ## Files
 
-- `spike/go-judge/go-judge` — v1.13.0 static binary
-- `spike/go-judge/mount.yaml` — sandbox mount configuration
-- `spike/go-judge/start.sh` — reference launcher (production uses `systemd-run`)
-- `spike/go-judge/test_all_languages.sh` — 9-language test suite
-- `spike/go-judge/benchmark.sh` — this benchmark script
+Historical spike tree removed after the Pure-Go → Rust+Go migration. Production sandbox config lives under `docker/go-judge/` (`Dockerfile`, `mount.yaml`).

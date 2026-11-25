@@ -9,9 +9,9 @@ cgroups v2 and namespaces; it was not run on the macOS development machine.
 
 ## Tools
 
-- `loadgen` (`rust/crates/ae-loadgen`): simulated students; each submits, waits for the
+- `loadgen` (`crates/ae-loadgen`): simulated students; each submits, waits for the
   VERDICT on `/api/v1/stream`, thinks, repeats. Works against either engine.
-- `shadowdiff` (`rust/crates/ae-shadowdiff`): compares `engine --shadow` records with the
+- `shadowdiff` (`crates/ae-shadowdiff`): compares `engine --shadow` records with the
   Go engine's Postgres rows (parity gate, see below).
 
 Cold vs warm: the verdict payload has no compile-cache flag, so `loadgen` classifies the
@@ -38,8 +38,8 @@ Go baseline for reference (owner-reported, from the design spec): p95 verdicts o
 
 ```bash
 source "$HOME/.cargo/env"
-cd rust && cargo build --release -p ae-loadgen -p ae-shadowdiff -p ae-engine
-# binaries: rust/target/release/{loadgen,shadowdiff,engine}
+cargo build --release -p ae-loadgen -p ae-shadowdiff -p ae-engine
+# binaries: target/release/{loadgen,shadowdiff,engine}
 ```
 
 ## Run: Go engine
@@ -65,7 +65,7 @@ export AC_DATABASE_URL="postgres://aethercode:$POSTGRES_PASSWORD@127.0.0.1:5433/
 export AC_REDIS_ADDR=127.0.0.1:6379
 export AC_JUDGE_URL=http://127.0.0.1:5050
 export AC_AUTH_ENABLED=false AC_ALLOW_UNAUTH=true
-rust/target/release/engine
+target/release/engine
 ```
 
 ## Load
@@ -74,7 +74,7 @@ Run each load three times per engine, restarting the engine before every run. Us
 for the record and the table for reading.
 
 ```bash
-LG=rust/target/release/loadgen
+LG=target/release/loadgen
 
 # 200 students
 $LG --url http://127.0.0.1:5100 --students 200 --languages c,cpp,python,java \
@@ -101,11 +101,11 @@ failure if `error_rate` is above 0 or `mismatch_rate` differs between engines.
 With the Go engine authoritative, run the Rust engine beside it on the same streams:
 
 ```bash
-rust/target/release/engine --role worker --shadow
+target/release/engine --role worker --shadow
 # drive load against the Go gateway with loadgen, then:
 export SHADOWDIFF_REDIS=redis://127.0.0.1:6379/
 export SHADOWDIFF_PG="postgres://aethercode:$POSTGRES_PASSWORD@127.0.0.1:5433/aethercode_exec"
-rust/target/release/shadowdiff --since 1h
+target/release/shadowdiff --since 1h
 ```
 
 `--pg` must connect as the owner role or one that bypasses row-level security; under RLS

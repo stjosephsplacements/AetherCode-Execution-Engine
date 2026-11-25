@@ -162,7 +162,7 @@ See `deploy/k8s/` for manifests. Workers are stateless — scale the Deployment 
 
 ## Rust engine
 
-A drop-in rewrite of the Go engine in `rust/` (binary `engine`, crate `ae-engine`), built from `rust/Dockerfile`. It keeps the HTTP API, Redis stream layout, Postgres schema (same embedded migrations) and Prometheus metric names of the Go engine, and runs beside it through shadow and cutover.
+A drop-in rewrite of the Go engine at the repo root (binary `engine`, crate `ae-engine` under `crates/`), built from `Dockerfile.rs`. It keeps the HTTP API, Redis stream layout, Postgres schema (same embedded migrations) and Prometheus metric names of the Go engine, and runs beside it through shadow and cutover.
 
 ### Components
 
@@ -233,4 +233,4 @@ Same `AC_*` variables as the Go engine (database, Redis, go-judge, OIDC, streams
 
 ### Deployment assets
 
-`rust/Dockerfile` (distroless, uid 65532, no shell), `docker-compose.yml` (profiles `rust`, `rust-shadow`), `deploy/k8s-overlays/rust-shadow/` (only the compare-only worker, safe beside live Go traffic) and `deploy/k8s-overlays/rust/` (gateway and worker Deployments, HPA, PDB, NetworkPolicy; applying it is a real cutover because the workers share the Go consumer group), `deploy/systemd/aethercode-exec-rs.service` with `env-rs.example`.
+`Dockerfile.rs` (distroless, uid 65532, no shell), `docker-compose.yml` (profiles `rust`, `rust-shadow`), `deploy/k8s-overlays/rust-shadow/` (only the compare-only worker, safe beside live Go traffic) and `deploy/k8s-overlays/rust/` (gateway and worker Deployments, HPA, PDB, NetworkPolicy; applying it is a real cutover because the workers share the Go consumer group), `deploy/systemd/aethercode-exec-rs.service` with `env-rs.example`.

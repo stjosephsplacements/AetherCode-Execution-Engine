@@ -349,7 +349,7 @@ func (h *Handler) HandleExecute(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if req.CallbackSecret == "" {
-			slog.Warn("callback_url set without callback_secret; webhook deliveries will be unsigned", "job_hint", req.Language)
+			slog.Warn("callback_url set without callback_secret; webhook deliveries will be unsigned", "job_hint", sanitizeLogValue(req.Language))
 		}
 	}
 	if len(req.CallbackSecret) > maxCallbackSecretLen {
