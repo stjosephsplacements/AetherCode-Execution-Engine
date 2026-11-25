@@ -17,7 +17,7 @@ uuid = "1"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
-testcontainers = "0.26"
+testcontainers = "0.25"
 uuid = { version = "1", features = ["v4"] }
 testcontainers-modules = { version = "0.13", features = ["postgres"] }
 

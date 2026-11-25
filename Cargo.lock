@@ -22,7 +22,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "testcontainers 0.26.3",
+ "testcontainers",
  "testcontainers-modules",
  "thiserror",
  "tokio",
@@ -53,7 +53,7 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
- "testcontainers 0.26.3",
+ "testcontainers",
  "testcontainers-modules",
  "tokio",
  "tokio-util",
@@ -93,7 +93,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "sqlx",
- "testcontainers 0.26.3",
+ "testcontainers",
  "testcontainers-modules",
  "thiserror",
  "tokio",
@@ -132,7 +132,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "testcontainers 0.26.3",
+ "testcontainers",
  "testcontainers-modules",
  "thiserror",
  "tokio",
@@ -169,7 +169,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sqlx",
- "testcontainers 0.26.3",
+ "testcontainers",
  "testcontainers-modules",
  "tokio",
  "uuid",
@@ -195,7 +195,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sqlx",
- "testcontainers 0.26.3",
+ "testcontainers",
  "testcontainers-modules",
  "thiserror",
  "tokio",
@@ -954,7 +954,7 @@ dependencies = [
  "ciborium",
  "clap",
  "criterion-plot",
- "itertools 0.13.0",
+ "itertools",
  "num-traits",
  "oorandom",
  "page_size",
@@ -972,7 +972,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
 dependencies = [
  "cast",
- "itertools 0.13.0",
+ "itertools",
 ]
 
 [[package]]
@@ -1240,17 +1240,6 @@ name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da7c62ceae207dd37ea5b845da6a0696c799f85e97da1ab5b7910be3c1c80223"
-
-[[package]]
-name = "ferroid"
-version = "0.8.9"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bb330bbd4cb7a5b9f559427f06f98a4f853a137c8298f3bd3f8ca57663e21986"
-dependencies = [
- "portable-atomic",
- "rand 0.9.5",
- "web-time",
-]
 
 [[package]]
 name = "filetime"
@@ -1916,15 +1905,6 @@ name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
-version = "0.14.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b192c782037fadd9cfa75548310488aabdbf3d2da73885b31bd0abd03351285"
 dependencies = [
  "either",
 ]
@@ -2697,7 +2677,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b570b25f7617e43d59005d0990ccb79e950a423952cea19671b7a876da390adf"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools",
  "proc-macro2",
  "quote",
  "syn 2.0.119",
@@ -3853,42 +3833,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "testcontainers"
-version = "0.26.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a81ec0158db5fbb9831e09d1813fe5ea9023a2b5e6e8e0a5fe67e2a820733629"
-dependencies = [
- "astral-tokio-tar",
- "async-trait",
- "bollard",
- "bytes",
- "docker_credential",
- "either",
- "etcetera 0.11.0",
- "ferroid",
- "futures",
- "itertools 0.14.0",
- "log",
- "memchr",
- "parse-display",
- "pin-project-lite",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror",
- "tokio",
- "tokio-stream",
- "tokio-util",
- "url",
-]
-
-[[package]]
 name = "testcontainers-modules"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1966329d5bb3f89d33602d2db2da971fb839f9297dad16527abf4564e2ae0a6d"
 dependencies = [
- "testcontainers 0.25.2",
+ "testcontainers",
 ]
 
 [[package]]

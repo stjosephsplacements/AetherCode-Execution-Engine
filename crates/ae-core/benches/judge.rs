@@ -1,6 +1,7 @@
 use ae_core::judge::{judge_output, normalize_output};
 use ae_core::model::Checker;
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use std::hint::black_box;
 
 fn bench(c: &mut Criterion) {
     let lines = "Hello World 42  \n".repeat(50);

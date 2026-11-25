@@ -4,11 +4,15 @@
   <img src="docs/assets/AetherCode.png" alt="AetherCode Execution Engine" width="100%">
 </p>
 
-An enterprise-grade, high-throughput, on-premise distributed code execution and evaluation engine. AetherCode ingests untrusted code submissions over HTTP, safely runs them inside hardware-isolated Linux kernel sandboxes (cgroups v2, seccomp-bpf, network namespaces, and tmpfs overlays), and streams real-time execution lifecycle events and test verdicts back to clients via Server-Sent Events (SSE).
+An enterprise-grade, high-throughput, on-premise distributed code execution and evaluation engine (**Rust + Go** dual stack after the Pure-Go migration). AetherCode ingests untrusted code submissions over HTTP, safely runs them inside hardware-isolated Linux kernel sandboxes (cgroups v2, seccomp-bpf, network namespaces, and tmpfs overlays), and streams real-time execution lifecycle events and test verdicts back to clients via Server-Sent Events (SSE).
+
+Rust (`crates/`, `Dockerfile.rs`, binary `engine`) is the forward path. Go (`cmd/`, `internal/`, `Dockerfile`) remains the live production engine through shadow comparison and cutover — same HTTP API, Redis stream layout, Postgres migrations, and Prometheus metric names.
 
 <p align="center">
   <a href="https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/ci.yml"><img src="https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/rust.yml"><img src="https://github.com/stjosephsplacements/AetherCode-Execution-Engine/actions/workflows/rust.yml/badge.svg" alt="Rust"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg" alt="License: AGPL-3.0"></a>
+  <img src="https://img.shields.io/badge/Rust-1.99-DEA584?logo=rust&logoColor=white" alt="Rust">
   <img src="https://img.shields.io/badge/Go-1.27%2B-00ADD8?logo=go&logoColor=white" alt="Go">
   <img src="https://img.shields.io/badge/Docker-Ready-2496ED?logo=docker&logoColor=white" alt="Docker">
   <img src="https://img.shields.io/badge/Architecture-Distributed%20%26%20Zero--Allocation-success" alt="Architecture">
@@ -29,6 +33,7 @@ An enterprise-grade, high-throughput, on-premise distributed code execution and 
   - [Local Source Compilation](#local-source-compilation)
   - [Systemd Production Service](#systemd-production-service)
   - [Verification and Benchmarking](#verification-and-benchmarking)
+- [Dual Engine (Rust + Go)](#dual-engine-rust--go)
 - [System Architecture](#system-architecture)
   - [Execution Flow](#execution-flow)
   - [Weighted Fair Queuing](#weighted-fair-queuing)
@@ -83,7 +88,8 @@ An enterprise-grade, high-throughput, on-premise distributed code execution and 
 
 | Component | Minimum Version | Default Network Address | Function |
 |---|---|---|---|
-| Go | 1.27+ | Localhost | Compilation toolchain and test suite |
+| Rust | 1.99 (see `rust-toolchain.toml`) | Localhost | Forward-path engine workspace (`cargo`) |
+| Go | 1.27+ | Localhost | Live engine through shadow/cutover |
 | PostgreSQL | 18 | `127.0.0.1:5433` | Submissions, results, and RLS tenant records |
 | Redis | 7+ | `127.0.0.1:6379` | Priority message streams, pub/sub, rate limiting, and cache |
 | go-judge | v1.13.0 | `127.0.0.1:5050` | Isolated containerized execution sandbox |
@@ -103,7 +109,7 @@ curl -fsSL http://127.0.0.1:5100/api/v1/health | jq .
 make down
 ```
 
-The Rust engine (see `docs/ARCHITECTURE.md`, "Rust engine") runs beside it under a compose profile on port 5101:
+The Rust engine runs beside Go under a compose profile on port 5101 (same API; see [Dual Engine](#dual-engine-rust--go)):
 
 ```bash
 docker compose --profile rust up --build -d engine-rs
@@ -114,21 +120,22 @@ until curl -fsS http://127.0.0.1:5101/readyz; do sleep 1; done
 
 ### Local Source Compilation
 
-To build and run directly on a host machine:
+**Go engine** (current production path):
 
 ```bash
-# 1. Compile binary
 go build -o aethercode-exec ./cmd/stj-exec
-
-# 2. Setup configuration file
 sudo mkdir -p /etc/aethercode-exec
 sudo cp deploy/systemd/env.example /etc/aethercode-exec/env
-
-# 3. Configure mandatory environment variables (database credentials, judge auth token)
-sudo nano /etc/aethercode-exec/env
-
-# 4. Start execution engine
+# edit DB credentials / judge token in /etc/aethercode-exec/env
 ./aethercode-exec
+```
+
+**Rust engine** (workspace at repo root; toolchain pinned in `rust-toolchain.toml`):
+
+```bash
+cargo build --release -p ae-engine --bin engine
+docker build -f Dockerfile.rs -t aethercode-exec-rs:dev .
+./target/release/engine --help
 ```
 
 ### Systemd Production Service
@@ -165,17 +172,34 @@ go build -o /tmp/loadgen ./cmd/loadgen
 
 ---
 
+## Dual Engine (Rust + Go)
+
+| | Go | Rust |
+|---|---|---|
+| Location | `cmd/`, `internal/` | `crates/` (`ae-engine`, `ae-gateway`, `ae-queue`, `ae-worker`, …) |
+| Image | `Dockerfile` | `Dockerfile.rs` (distroless) |
+| Compose | `engine` (default) | `engine-rs` (`--profile rust`) |
+| Role today | Live traffic | Shadow / cutover candidate |
+
+- **Shadow:** `docker compose --profile rust-shadow up --build engine-rs-shadow` — compare-only worker; verdicts in `ac:shadow:<job_id>`, no Postgres writes. Diff with `ae-shadowdiff`. Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`docs/benchmarks/rust-vs-go.md`](docs/benchmarks/rust-vs-go.md).
+- **K8s:** `deploy/k8s-overlays/rust-shadow/` (safe beside Go) and `deploy/k8s-overlays/rust/` (cutover — shared consumer group).
+- Do not remove or break the Go engine, image, or manifests until cutover is complete ([`AGENTS.md`](AGENTS.md)).
+
+---
+
 ## System Architecture
 
 <p align="center">
   <img src="docs/assets/Architecture.png" alt="AetherCode Execution Engine System Architecture" width="100%">
 </p>
 
+The sections below describe the shared execution contract. Both engines implement it; production traffic today is served by the Go binary unless you have cut over to Rust.
+
 ### Execution Flow
 
 1. **Ingestion (`POST /api/v1/execute`):** The HTTP gateway checks rate limits and queue depths, validates schema constraints, generates a UUIDv7 job identifier, inserts the submission into PostgreSQL, and enqueues the payload into Redis alongside test case structures in an optimized Redis pipeline.
 2. **Event Subscription (`GET /api/v1/stream?job_id=...`):** Clients establish an SSE connection. The gateway subscribes to the Redis pub/sub channel before replaying historical event logs to eliminate message-delivery race conditions.
-3. **Worker Processing:** Available worker goroutines dequeue jobs using `XREADGROUP`. For compiled languages, source code is checked against the compilation hash cache. If missing, it compiles the binary, stores the artifact file ID, and caches it.
+3. **Worker Processing:** Workers dequeue jobs using `XREADGROUP`. For compiled languages, source code is checked against the compilation hash cache. If missing, it compiles the binary, stores the artifact file ID, and caches it.
 4. **Sandboxed Test Runner:** The worker batches test cases into `/run` execution payloads against go-judge. Tests run with strict cgroup CPU and memory boundaries.
 5. **Output Evaluation:** Actual output streams through the zero-allocation judge engine against expected test case outputs.
 6. **Verdict Persistence and Event Dispatch:** The worker commits test verdicts and aggregate statistics to PostgreSQL via CAS updates, then broadcasts the terminal `VERDICT` event over Redis pub/sub to close client streams.
@@ -666,15 +690,18 @@ Contributions are welcome. Please consult:
 - [AGENTS.md](AGENTS.md): Architectural instructions for automated coding agents.
 
 Before submitting pull requests:
+
 ```bash
-# Format code
+# Go
 gofmt -s -w .
+go test -race -count=1 ./...
+golangci-lint run ./...
 
-# Run test suite
-go test -v -race ./...
-
-# Run static linter
-golangci-lint run
+# Rust (from repo root)
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+cargo deny check && cargo audit
 ```
 
 ---

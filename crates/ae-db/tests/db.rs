@@ -81,7 +81,7 @@ fn result(i: i32, v: Verdict) -> TestResult {
     }
 }
 
-async fn scalar_i64(db: &Db, sql: &str) -> i64 {
+async fn scalar_i64(db: &Db, sql: &'static str) -> i64 {
     sqlx::query_scalar(sql).fetch_one(db.pool()).await.unwrap()
 }
 
@@ -167,7 +167,11 @@ async fn migrates_a_database_already_migrated_by_go() {
         (7, "007_drop_legacy_problem_bank.sql"),
     ] {
         let sql = std::fs::read_to_string(format!("{dir}/{f}")).unwrap();
-        sqlx::raw_sql(&sql).execute(db.pool()).await.unwrap();
+        // Migration files are trusted repo content, not user input.
+        sqlx::raw_sql(sqlx::AssertSqlSafe(sql))
+            .execute(db.pool())
+            .await
+            .unwrap();
         sqlx::query("INSERT INTO schema_version (version) VALUES ($1)")
             .bind(v)
             .execute(db.pool())

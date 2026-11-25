@@ -358,7 +358,8 @@ async fn alg_none_and_hs256_confusion_rejected() {
     ] {
         let mut h = Header::new(Algorithm::HS256);
         h.kid = Some("test-key".to_owned());
-        let tok = jsonwebtoken::encode(&h, &claims, &EncodingKey::from_secret(&secret)).unwrap();
+        let tok =
+            jsonwebtoken::encode(&h, &claims, &EncodingKey::from_secret(&secret).unwrap()).unwrap();
         assert!(f.auth.validate(&tok).await.is_err());
     }
 
@@ -387,7 +388,8 @@ async fn symmetric_jwks_keys_are_never_used() {
     let mut h = Header::new(Algorithm::HS256);
     h.kid = Some("hmac".to_owned());
     let claims = valid_claims(ISSUER, AUDIENCE, "mallory");
-    let tok = jsonwebtoken::encode(&h, &claims, &EncodingKey::from_secret(secret)).unwrap();
+    let tok =
+        jsonwebtoken::encode(&h, &claims, &EncodingKey::from_secret(secret).unwrap()).unwrap();
     assert!(auth.validate(&tok).await.is_err());
 }
 

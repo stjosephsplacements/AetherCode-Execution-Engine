@@ -58,6 +58,7 @@ fn encrypt(key: &[u8], plaintext: &str) -> Result<Vec<u8>> {
     let gcm = Aes256Gcm::new_from_slice(key).map_err(|e| Error::Crypto(e.to_string()))?;
     let mut nonce = [0u8; 12];
     rand::rng().fill_bytes(&mut nonce);
+    #[allow(deprecated)] // Nonce::from_slice → TryFrom still churns across aes-gcm minors
     let ct = gcm
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_bytes())
         .map_err(|e| Error::Crypto(e.to_string()))?;
@@ -86,6 +87,7 @@ fn decrypt(key: Option<&[u8]>, stored: &[u8]) -> Result<String> {
         return Err(Error::Crypto("ciphertext too short".into()));
     }
     let gcm = Aes256Gcm::new_from_slice(key).map_err(|e| Error::Crypto(e.to_string()))?;
+    #[allow(deprecated)]
     let pt = gcm
         .decrypt(Nonce::from_slice(&raw[..12]), &raw[12..])
         .map_err(|_| Error::Crypto("gcm decrypt failed".into()))?;
