@@ -69,6 +69,12 @@ var (
 		Help:      "Stuck messages the reclaimer took over, by stream and result (recovered: reprocessed and acked; poison: dead-lettered).",
 	}, []string{"stream", "result"})
 
+	DLQPoisonStreamDepth = promauto.NewGauge(prometheus.GaugeOpts{
+		Namespace: "ac",
+		Name:      "dlq_poison_stream_depth",
+		Help:      "Current XLEN of the ac:dlq:poison dead-letter stream.",
+	})
+
 	CompileCacheHitsTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "ac",
 		Name:      "compile_cache_hits_total",
