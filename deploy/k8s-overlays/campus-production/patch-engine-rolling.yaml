@@ -33,10 +33,25 @@ spec:
             periodSeconds: 5
             failureThreshold: 30
           env:
+            # Campus Phase A: unauth until campus OIDC is wired (secret also carries these).
+            - name: AC_AUTH_ENABLED
+              value: "false"
+            - name: AC_ALLOW_UNAUTH
+              value: "true"
             - name: AC_JUDGE_URL
               value: http://go-judge-svc.aethercode.svc.cluster.local:5050
             - name: AC_REDIS_ADDR
               value: aethercode-exec-redis.aethercode.svc.cluster.local:6379
+            - name: AC_REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aethercode-exec-secrets
+                  key: AC_REDIS_PASSWORD
+            - name: AC_JUDGE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: aethercode-exec-secrets
+                  key: AC_JUDGE_TOKEN
             - name: AC_DATABASE_URL
               valueFrom:
                 secretKeyRef:
