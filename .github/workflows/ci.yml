@@ -63,7 +63,7 @@ jobs:
         run: go test -race -count=1 -timeout=120s -coverprofile=coverage.out -covermode=atomic ./...
       - if: steps.gate.outputs.skip != 'true'
         name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@v7
         with:
           files: coverage.out
           flags: unit
