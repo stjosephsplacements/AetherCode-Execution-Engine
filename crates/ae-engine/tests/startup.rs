@@ -73,7 +73,7 @@ async fn unavailable_language_not_reported_available() {
         langs
             .iter()
             .find(|l| l["id"] == id)
-            .unwrap_or_else(|| panic!("{id} missing from {langs:?}"))["available"]
+            .unwrap_or_else(|| panic!("language id missing from catalogue"))["available"]
             .as_bool()
             .unwrap()
     };
@@ -165,8 +165,11 @@ async fn metrics_only_on_loopback() {
         .text()
         .await
         .unwrap();
-    assert!(body.contains("ac_queue_depth"), "{body}");
-    assert!(body.contains("ac_scheduler_budget_used"), "{body}");
+    assert!(body.contains("ac_queue_depth"), "missing ac_queue_depth");
+    assert!(
+        body.contains("ac_scheduler_budget_used"),
+        "missing ac_scheduler_budget_used"
+    );
     assert!(e.has_log(&format!("127.0.0.1:{}", e.debug_port)));
     // A non-loopback address of this host must not reach the debug listener.
     if let Some(ip) = local_ip() {

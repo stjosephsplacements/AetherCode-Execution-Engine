@@ -70,8 +70,14 @@ async fn logs_never_contain_path_query_or_credentials() {
     let url = format!("http://user:pass@{refused}/hook/private?token=SECRET");
     assert!(!client.dispatch(&url, "s3cret", &payload()).await);
     let out = String::from_utf8(cap.0.lock().unwrap().clone()).unwrap();
-    assert!(out.contains(&format!("http://{}", ok.address())), "{out}");
-    assert!(out.contains("webhook attempt failed"), "{out}");
+    assert!(
+        out.contains(&format!("http://{}", ok.address())),
+        "expected host without credentials in logs"
+    );
+    assert!(
+        out.contains("webhook attempt failed"),
+        "expected failure log line"
+    );
     let leaked = ["SECRET", "token", "user:pass", "pass@", "/hook/private", "s3cret"]
         .iter()
         .any(|s| out.contains(s));

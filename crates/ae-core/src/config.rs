@@ -527,7 +527,7 @@ mod tests {
         .unwrap();
         let d = format!("{c:?}");
         for secret in ["hunter2", "tok-secret", "dbpass", "abab"] {
-            assert!(!d.contains(secret), "{secret} leaked: {d}");
+            assert!(!d.contains(secret), "secret leaked in Debug");
         }
     }
 }
