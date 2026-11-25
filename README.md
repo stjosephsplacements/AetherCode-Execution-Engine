@@ -643,16 +643,19 @@ If queue wait dominates, add capacity; if `run` dominates, look at the language 
 
 | Path | Contents |
 |---|---|
-| `cmd/stj-exec`, `cmd/loadgen` | The engine binary and the load generator |
-| `internal/` | The gateway, queue, worker, sandbox client, database layer and supporting packages |
+| `crates/`, `Cargo.toml` | Rust engine workspace (forward path; binary `engine`) |
+| `Dockerfile.rs` | Distroless Rust engine image |
+| `cmd/stj-exec`, `cmd/loadgen` | Go engine binary and load generator (live through shadow/cutover) |
+| `internal/` | Go gateway, queue, worker, sandbox client, database layer |
+| `Dockerfile` | Go engine image |
 | `api/openapi.yaml` | The HTTP API contract |
-| `migrations/` | Embedded PostgreSQL migrations |
-| `deploy/systemd/` | The systemd unit and the environment template |
-| `deploy/k8s/` | Kustomize manifests for Kubernetes |
+| `migrations/` | Embedded PostgreSQL migrations (shared) |
+| `deploy/systemd/` | systemd units and environment templates |
+| `deploy/k8s/`, `deploy/k8s-overlays/` | Kustomize manifests (Go + Rust shadow/cutover) |
 | `deploy/monitoring/` | Prometheus alert rules |
-| `docker/go-judge/` | The sandbox image (go-judge and the language toolchains) |
+| `docker/go-judge/` | Sandbox image (go-judge and language toolchains) |
 | `scripts/` | Smoke and end-to-end shell tests |
-| `spike/` | The go-judge spike this design started from |
+| `fuzz/` | cargo-fuzz targets |
 | `docs/` | Architecture, `benchmarks/` and `assets/` (README images) |
 
 ## Contributing

@@ -91,7 +91,7 @@ services:
     profiles: ["rust"]
     build:
       context: .
-      dockerfile: rust/Dockerfile
+      dockerfile: Dockerfile.rs
       args:
         COMMIT_SHA: "${COMMIT_SHA:-dev}"
     image: aethercode-exec-rs:dev
@@ -126,7 +126,7 @@ services:
     profiles: ["rust-shadow"]
     build:
       context: .
-      dockerfile: rust/Dockerfile
+      dockerfile: Dockerfile.rs
       args:
         COMMIT_SHA: "${COMMIT_SHA:-dev}"
     image: aethercode-exec-rs:dev

@@ -6,7 +6,6 @@
 # Docs & research (not needed to build the engine)
 *.md
 docs/
-spike/
 docker/
 LICENSE
 
@@ -24,4 +23,5 @@ loadgen
 .DS_Store
 
 # Rust build outputs
-rust/target
+/target
+**/target
