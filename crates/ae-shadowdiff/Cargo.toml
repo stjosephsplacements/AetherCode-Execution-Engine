@@ -29,6 +29,6 @@ workspace = true
 
 [dev-dependencies]
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres"] }
-testcontainers = "0.25"
-testcontainers-modules = { version = "0.13", features = ["redis", "postgres"] }
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["redis", "postgres"] }
 uuid = { version = "1", features = ["v4"] }
