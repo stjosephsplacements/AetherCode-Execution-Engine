@@ -3,6 +3,7 @@
 
 mod common;
 
+use ae_core::observe::CompileCacheSource;
 use ae_sandbox::{FileId, Sandbox};
 use ae_worker::{CacheKey, CompileCache, Error};
 use common::FakeSandbox;
@@ -12,7 +13,7 @@ use std::time::Duration;
 use tokio::sync::Notify;
 
 fn cache(sb: &Arc<FakeSandbox>, ttl: Duration, max_bytes: u64) -> CompileCache {
-    CompileCache::new(sb.clone() as Arc<dyn Sandbox>, ttl, max_bytes)
+    CompileCache::new(sb.clone() as Arc<dyn Sandbox>, ttl, max_bytes, None)
 }
 
 fn key(src: &str) -> CacheKey {
@@ -70,25 +71,25 @@ fn cache_key_changes_with_toolchain_version() {
 async fn hit_after_miss_and_ttl_expiry() {
     let sb = Arc::new(FakeSandbox::default());
     let c = cache(&sb, Duration::from_millis(50), 1 << 30);
-    let (f, hit) = c
+    let (f, source) = c
         .get_or_compile(key("a"), async { Ok(FileId("f1".into())) })
         .await
         .unwrap();
-    assert!(!hit);
+    assert_eq!(source, CompileCacheSource::Miss);
     assert_eq!(f.id(), &FileId("f1".into()));
-    let (f2, hit) = c
+    let (f2, source) = c
         .get_or_compile(key("a"), async { Ok(FileId("never".into())) })
         .await
         .unwrap();
-    assert!(hit);
+    assert_eq!(source, CompileCacheSource::L1);
     assert_eq!(f2.id(), &FileId("f1".into()));
     drop((f, f2));
     tokio::time::sleep(Duration::from_millis(80)).await;
-    let (f3, hit) = c
+    let (f3, source) = c
         .get_or_compile(key("a"), async { Ok(FileId("f2".into())) })
         .await
         .unwrap();
-    assert!(!hit, "an expired entry is a miss");
+    assert_eq!(source, CompileCacheSource::Miss, "an expired entry is a miss");
     assert_eq!(f3.id(), &FileId("f2".into()));
     settle().await;
     assert_eq!(*sb.deleted.lock().unwrap(), vec![FileId("f1".into())]);
@@ -121,14 +122,14 @@ async fn zero_ttl_compiles_every_time_and_releases_each_file() {
     let runs = Arc::new(AtomicUsize::new(0));
     for i in 0..3 {
         let runs = runs.clone();
-        let (f, hit) = c
+        let (f, source) = c
             .get_or_compile(key("k"), async move {
                 runs.fetch_add(1, Ordering::SeqCst);
                 Ok(FileId(format!("f{i}")))
             })
             .await
             .unwrap();
-        assert!(!hit, "a disabled cache reported a hit");
+        assert_eq!(source, CompileCacheSource::Miss, "a disabled cache reported a hit");
         drop(f);
     }
     assert_eq!(runs.load(Ordering::SeqCst), 3);
@@ -146,7 +147,7 @@ async fn identical_concurrent_jobs_compile_once() {
     for _ in 0..20 {
         let (c, runs, release) = (c.clone(), runs.clone(), release.clone());
         tasks.push(tokio::spawn(async move {
-            let (f, hit) = c
+            let (f, source) = c
                 .get_or_compile(key("same"), async move {
                     runs.fetch_add(1, Ordering::SeqCst);
                     release.notified().await;
@@ -154,24 +155,24 @@ async fn identical_concurrent_jobs_compile_once() {
                 })
                 .await
                 .unwrap();
-            (f.id().clone(), hit)
+            (f.id().clone(), source)
         }));
     }
     tokio::time::sleep(Duration::from_millis(100)).await;
     release.notify_waiters();
     let mut leaders = 0;
     for t in tasks {
-        let (id, hit) = t.await.unwrap();
+        let (id, source) = t.await.unwrap();
         assert_eq!(id, FileId("bin-1".into()));
-        leaders += usize::from(!hit);
+        leaders += usize::from(source == CompileCacheSource::Miss);
     }
     assert_eq!(runs.load(Ordering::SeqCst), 1);
     assert_eq!(leaders, 1, "exactly one caller compiles");
-    let (_, hit) = c
+    let (_, source) = c
         .get_or_compile(key("same"), async { Ok(FileId("x".into())) })
         .await
         .unwrap();
-    assert!(hit, "a later job hits the cache");
+    assert_ne!(source, CompileCacheSource::Miss, "a later job hits the cache");
 }
 
 #[tokio::test]
@@ -202,11 +203,11 @@ async fn a_source_that_does_not_compile_is_shared_but_not_cached() {
         }
     }
     assert_eq!(runs.load(Ordering::SeqCst), 1);
-    let (_, hit) = c
+    let (_, source) = c
         .get_or_compile(key("bad"), async { Ok(FileId("fixed".into())) })
         .await
         .unwrap();
-    assert!(!hit, "a failed compile must not be cached");
+    assert_eq!(source, CompileCacheSource::Miss, "a failed compile must not be cached");
 }
 
 #[tokio::test]
@@ -273,7 +274,7 @@ async fn a_cancelled_leader_does_not_strand_waiters() {
         tokio::spawn(async move {
             c.get_or_compile(key("k"), async { Ok(FileId("mine".into())) })
                 .await
-                .map(|(f, hit)| (f.id().clone(), hit))
+                .map(|(f, source)| (f.id().clone(), source))
         })
     };
     tokio::time::sleep(Duration::from_millis(20)).await;
@@ -284,7 +285,7 @@ async fn a_cancelled_leader_does_not_strand_waiters() {
         .expect("waiter stranded")
         .unwrap()
         .unwrap();
-    assert_eq!(got, (FileId("bin".into()), true));
+    assert_eq!(got, (FileId("bin".into()), CompileCacheSource::L1));
 }
 
 #[tokio::test]

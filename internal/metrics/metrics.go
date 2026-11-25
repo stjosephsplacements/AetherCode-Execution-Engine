@@ -81,6 +81,18 @@ var (
 		Help:      "Compile cache hits — source was found in cache, skipping recompilation.",
 	})
 
+	CompileCacheL1HitsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "ac",
+		Name:      "compile_cache_l1_hits_total",
+		Help:      "Compile cache L1 hits — in-process cache satisfied the request.",
+	})
+
+	CompileCacheL2HitsTotal = promauto.NewCounter(prometheus.CounterOpts{
+		Namespace: "ac",
+		Name:      "compile_cache_l2_hits_total",
+		Help:      "Compile cache L2 hits — Redis distributed cache satisfied the request.",
+	})
+
 	CompileCacheMissesTotal = promauto.NewCounter(prometheus.CounterOpts{
 		Namespace: "ac",
 		Name:      "compile_cache_misses_total",

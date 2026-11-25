@@ -23,12 +23,12 @@ use tokio::time::{Instant, Interval, Sleep};
 pub const SSE_MAX_LIFETIME: Duration = Duration::from_secs(5 * 60);
 /// Keepalive comment interval.
 pub const SSE_HEARTBEAT: Duration = Duration::from_secs(15);
-const LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
+pub(crate) const LOOKUP_TIMEOUT: Duration = Duration::from_secs(3);
 const HEARTBEAT_FRAME: &[u8] = b": heartbeat\n\n";
 const RECONNECT_FRAME: &[u8] = b": reconnect\n\n";
 
 /// Go's `http.Error` with a pre-encoded JSON message: text/plain, nosniff, trailing newline.
-fn plain_error(status: StatusCode, json: &str) -> Response {
+pub(crate) fn plain_error(status: StatusCode, json: &str) -> Response {
     (
         status,
         [
@@ -63,7 +63,7 @@ pub fn compare_event_ids(a: &str, b: &str) -> Ordering {
     parse_suffix(a).cmp(&parse_suffix(b))
 }
 
-fn not_after(id: &str, mark: &str) -> bool {
+pub(crate) fn not_after(id: &str, mark: &str) -> bool {
     !mark.is_empty() && compare_event_ids(id, mark) != Ordering::Greater
 }
 

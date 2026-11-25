@@ -11,7 +11,7 @@ ae-core = { path = "../ae-core" }
 ae-db = { path = "../ae-db" }
 ae-queue = { path = "../ae-queue" }
 ae-sandbox = { path = "../ae-sandbox" }
-axum = "0.8"
+axum = { version = "0.8", features = ["ws"] }
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 futures-util = "0.3"
 http = "1"

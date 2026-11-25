@@ -11,6 +11,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/redis/go-redis/v9"
 
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/db"
 	"github.com/stjosephsplacements/AetherCode-Execution-Engine/internal/eventlog"
@@ -30,7 +31,7 @@ type Worker struct {
 	cc              *compileCache
 }
 
-func New(pool *pgxpool.Pool, judge *sandbox.Client, consumer *queue.DualConsumer, pubsub *queue.PubSub, jobTimeout time.Duration, testParallelism int, compileCacheTTL time.Duration) *Worker {
+func New(pool *pgxpool.Pool, judge *sandbox.Client, consumer *queue.DualConsumer, pubsub *queue.PubSub, rdb *redis.Client, jobTimeout time.Duration, testParallelism int, compileCacheTTL time.Duration) *Worker {
 	return &Worker{
 		pool:            pool,
 		judge:           judge,
@@ -38,7 +39,7 @@ func New(pool *pgxpool.Pool, judge *sandbox.Client, consumer *queue.DualConsumer
 		pubsub:          pubsub,
 		jobTimeout:      jobTimeout,
 		testParallelism: max(testParallelism, 1),
-		cc:              newCompileCache(compileCacheTTL),
+		cc:              newCompileCache(compileCacheTTL, rdb),
 	}
 }
 
@@ -237,7 +238,7 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 
 		cacheKey := compileCacheKeyWithOptions(sub.Language, sub.SourceCode, spec.files, spec.compilerFlags)
 		// Jobs with the same source that arrive together share one compile.
-		outcome, shared, err := w.cc.compile(jobCtx, cacheKey, func() (compileOutcome, error) {
+		outcome, tier, err := w.cc.compile(jobCtx, cacheKey, func() (compileOutcome, error) {
 			compileStart := time.Now()
 			compileResult, err := w.compileWithOptions(jobCtx, lang, sub.SourceCode, spec.files, spec.compilerFlags)
 			metrics.CompileDuration.WithLabelValues(sub.Language).Observe(time.Since(compileStart).Seconds())
@@ -261,10 +262,16 @@ func (w *Worker) process(ctx context.Context, submissionID string) error {
 			return w.failSubmission(jobCtx, id, model.VerdictCompilationError, outcome.stderr, log)
 		}
 		fileID = outcome.fileID
-		if shared {
+		switch tier {
+		case cacheTierL1, cacheTierShared:
+			metrics.CompileCacheL1HitsTotal.Inc()
 			metrics.CompileCacheHitsTotal.Inc()
-			log.Info("compile cache hit", "fileId", fileID)
-		} else {
+			log.Info("compile cache hit", "layer", "l1", "fileId", fileID)
+		case cacheTierL2:
+			metrics.CompileCacheL2HitsTotal.Inc()
+			metrics.CompileCacheHitsTotal.Inc()
+			log.Info("compile cache hit", "layer", "l2", "fileId", fileID)
+		default:
 			metrics.CompileCacheMissesTotal.Inc()
 			log.Info("compiled", "fileId", fileID)
 		}

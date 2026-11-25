@@ -649,11 +649,11 @@ impl ae_core::observe::JobObserver for Recorder {
             .unwrap()
             .push(format!("finished:{language}:{verdict:?}"));
     }
-    fn compiled(&self, language: &str, _: Duration, hit: bool) {
+    fn compiled(&self, language: &str, _: Duration, source: ae_core::observe::CompileCacheSource) {
         self.0
             .lock()
             .unwrap()
-            .push(format!("compiled:{language}:{hit}"));
+            .push(format!("compiled:{language}:{source:?}"));
     }
     fn stage(&self, stage: &str, _: Duration) {
         self.0.lock().unwrap().push(format!("stage:{stage}"));

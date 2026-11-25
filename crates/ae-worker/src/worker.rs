@@ -45,6 +45,8 @@ pub struct WorkerOptions {
     pub budget: Cost,
     pub cache_ttl: Duration,
     pub cache_max_bytes: u64,
+    /// Redis connection for the distributed compile cache (L2). `None` disables L2.
+    pub compile_cache_redis: Option<redis::aio::ConnectionManager>,
     pub webhook: WebhookClient,
     /// Job progress hook (metrics and the gateway's drain rate). The engine passes
     /// `ae_gateway::AppState::worker_observer()`; the default records nothing.
@@ -60,6 +62,7 @@ impl WorkerOptions {
             budget: Scheduler::budget_for(cfg),
             cache_ttl: cfg.compile_cache_ttl,
             cache_max_bytes: cfg.compile_cache_max_mb.saturating_mul(1 << 20),
+            compile_cache_redis: None,
             webhook: WebhookClient::new(),
             observer: Observer::default(),
         }
@@ -90,7 +93,12 @@ impl Worker {
         registry: Arc<Registry>,
         opts: WorkerOptions,
     ) -> Self {
-        let cache = CompileCache::new(sandbox.clone(), opts.cache_ttl, opts.cache_max_bytes);
+        let cache = CompileCache::new(
+            sandbox.clone(),
+            opts.cache_ttl,
+            opts.cache_max_bytes,
+            opts.compile_cache_redis.clone(),
+        );
         let scheduler = Scheduler::new(opts.budget);
         Self {
             inner: Arc::new(Inner {
@@ -314,9 +322,14 @@ impl Worker {
                     .await
                     .unwrap_or_else(|_| Err(Error::Other("compile: job deadline exceeded".into())));
             match compiled {
-                Ok((f, hit)) => {
-                    obs.compiled(lang_id, compile_start.elapsed(), hit);
-                    tracing::info!(job_id = id, file_id = %f.id().0, cache_hit = hit, "compiled");
+                Ok((f, source)) => {
+                    obs.compiled(lang_id, compile_start.elapsed(), source);
+                    tracing::info!(
+                        job_id = id,
+                        file_id = %f.id().0,
+                        cache_source = ?source,
+                        "compiled"
+                    );
                     binary = Some(f);
                 }
                 Err(Error::Compile(stderr)) => {

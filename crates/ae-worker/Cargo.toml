@@ -27,6 +27,7 @@ tokio-util = "0.7.20"
 tracing = "0.1.44"
 tracing-opentelemetry = { version = "0.34", default-features = false }
 url = "2"
+redis = { version = "1.8.1", features = ["tokio-comp", "connection-manager"] }
 
 [dev-dependencies]
 redis = { version = "1.8.1", features = ["tokio-comp", "streams", "connection-manager"] }

@@ -6,6 +6,15 @@ use crate::model::Verdict;
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Where a compile was satisfied.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CompileCacheSource {
+    #[default]
+    Miss,
+    L1,
+    L2,
+}
+
 /// Every method defaults to a no-op.
 pub trait JobObserver: Send + Sync {
     /// A claimed job starts processing (active-worker gauge up).
@@ -15,7 +24,7 @@ pub trait JobObserver: Send + Sync {
     /// This worker recorded the job's verdict; `elapsed` runs from the claim.
     fn job_finished(&self, _language: &str, _verdict: Verdict, _elapsed: Duration) {}
     /// A compile finished or was served from the cache.
-    fn compiled(&self, _language: &str, _elapsed: Duration, _cache_hit: bool) {}
+    fn compiled(&self, _language: &str, _elapsed: Duration, _source: CompileCacheSource) {}
     /// One stage of a job (`claim`, `run`, `persist`, `publish`).
     fn stage(&self, _stage: &str, _elapsed: Duration) {}
 }

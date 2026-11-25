@@ -2,7 +2,7 @@
 
 use crate::handlers::{self, AppState};
 use crate::middleware::RequestLogLayer;
-use crate::{metrics, sse};
+use crate::{metrics, sse, ws};
 use axum::Router;
 use axum::routing::{get, post};
 use std::future::Future;
@@ -21,6 +21,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/v1/execute", post(handlers::execute))
         .route("/api/v1/stream", get(sse::stream))
+        .route("/api/v1/ws", get(ws::stream))
         .route("/api/v1/health", get(handlers::health))
         .route("/api/v1/languages", get(handlers::languages))
         .route(

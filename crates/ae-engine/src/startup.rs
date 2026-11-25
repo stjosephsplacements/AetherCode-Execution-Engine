@@ -297,6 +297,12 @@ pub async fn run(s: Settings) -> Result<(), String> {
         "queue sampler",
         spawn_queue_sampler(queue.clone(), QUEUE_SAMPLE),
     );
+    if !shadow && cfg.db_retention_days > 0 {
+        sup.adopt(
+            "retention pruner",
+            crate::retention::spawn_retention_pruner(db.clone(), cfg.db_retention_days, token.clone()),
+        );
+    }
     // Shared by the debug listener's /readyz and, when there is one, the gateway's.
     let ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let debug = bind_debug(&cfg).await?;
@@ -365,6 +371,7 @@ pub async fn run(s: Settings) -> Result<(), String> {
             None => (Arc::new(db.clone()), Arc::new(queue.clone())),
         };
         let mut opts = WorkerOptions::from_config(&cfg);
+        opts.compile_cache_redis = Some(queue.redis_conn());
         opts.shutdown_grace = DRAIN_GRACE;
         opts.observer = match &state {
             Some(st) => st.worker_observer(),

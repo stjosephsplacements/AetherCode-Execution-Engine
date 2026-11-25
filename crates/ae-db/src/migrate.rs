@@ -18,6 +18,7 @@ pub(crate) const MIGRATIONS: &[(i32, &str, &str)] = &[
     m!(6, "006_idempotency_without_mode.sql"),
     m!(7, "007_drop_legacy_problem_bank.sql"),
     m!(8, "008_webhook_delivered.sql"),
+    m!(9, "009_retention_prune.sql"),
 ];
 
 impl Db {

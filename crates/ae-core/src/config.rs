@@ -73,6 +73,9 @@ pub struct Config {
     /// `AC_DEBUG_ADDR`: address that listener binds (default loopback). Anything else
     /// exposes `/metrics` and the probes to the network and must be NetworkPolicy-restricted.
     pub debug_addr: std::net::IpAddr,
+
+    /// `AC_DB_RETENTION_DAYS`: 0 disables periodic pruning of terminal submissions.
+    pub db_retention_days: u32,
 }
 
 impl Config {
@@ -160,6 +163,7 @@ impl Config {
                     )
                 },
             )?,
+            db_retention_days: num(m, "AC_DB_RETENTION_DAYS", 0)?,
         };
         cfg.validate()?;
         Ok(cfg)
@@ -384,6 +388,7 @@ mod tests {
         assert_eq!(c.debug_port, 6060);
         assert!(c.trusted_proxies.is_empty());
         assert!(c.webhook_master_key.is_none());
+        assert_eq!(c.db_retention_days, 0);
     }
 
     #[test]

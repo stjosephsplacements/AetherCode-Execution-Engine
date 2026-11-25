@@ -9,8 +9,12 @@ import (
 	"time"
 )
 
+func cacheHit(tier cacheTier) bool {
+	return tier != cacheTierMiss
+}
+
 func TestCompileCacheHitAndMiss(t *testing.T) {
-	c := newCompileCache(time.Minute)
+	c := newCompileCache(time.Minute, nil)
 	key := compileCacheKey("cpp", "int main(){}")
 
 	if _, ok := c.get(key); ok {
@@ -25,7 +29,7 @@ func TestCompileCacheHitAndMiss(t *testing.T) {
 }
 
 func TestCompileCacheExpiry(t *testing.T) {
-	c := newCompileCache(10 * time.Millisecond)
+	c := newCompileCache(10 * time.Millisecond, nil)
 	key := compileCacheKey("python", "print(1)")
 
 	c.put(key, "file-xyz")
@@ -37,7 +41,7 @@ func TestCompileCacheExpiry(t *testing.T) {
 }
 
 func TestCompileCacheDisabledWhenZeroTTL(t *testing.T) {
-	c := newCompileCache(0)
+	c := newCompileCache(0, nil)
 	key := compileCacheKey("c", "int main(){}")
 
 	c.put(key, "file-999")
@@ -47,7 +51,7 @@ func TestCompileCacheDisabledWhenZeroTTL(t *testing.T) {
 }
 
 func TestCompileCacheEvictExpired(t *testing.T) {
-	c := newCompileCache(10 * time.Millisecond)
+	c := newCompileCache(10 * time.Millisecond, nil)
 	c.put(compileCacheKey("a", "1"), "f1")
 	c.put(compileCacheKey("b", "2"), "f2")
 
@@ -75,7 +79,7 @@ func TestCompileCacheKeyDeterministic(t *testing.T) {
 }
 
 func BenchmarkCompileCacheGet_Hit(b *testing.B) {
-	c := newCompileCache(time.Hour)
+	c := newCompileCache(time.Hour, nil)
 	key := compileCacheKey("cpp", "int main(){ return 0; }")
 	c.put(key, "file-bench-hit")
 
@@ -89,7 +93,7 @@ func BenchmarkCompileCacheGet_Hit(b *testing.B) {
 }
 
 func BenchmarkCompileCacheGet_Miss(b *testing.B) {
-	c := newCompileCache(time.Hour)
+	c := newCompileCache(time.Hour, nil)
 	key := "non-existent-key"
 
 	b.ResetTimer()
@@ -101,7 +105,7 @@ func BenchmarkCompileCacheGet_Miss(b *testing.B) {
 }
 
 func BenchmarkCompileCachePut(b *testing.B) {
-	c := newCompileCache(time.Hour)
+	c := newCompileCache(time.Hour, nil)
 	// Pre-generate keys so we only benchmark put
 	keys := make([]string, b.N)
 	for i := 0; i < b.N; i++ {
@@ -123,7 +127,7 @@ func BenchmarkCompileCacheEvict_1000Entries(b *testing.B) {
 	}
 
 	for i := 0; i < b.N; i++ {
-		c := newCompileCache(time.Nanosecond)
+		c := newCompileCache(time.Nanosecond, nil)
 		for j := 0; j < 1000; j++ {
 			c.m[keys[j]] = cacheEntry{
 				fileID:  "expired-file",
@@ -168,7 +172,7 @@ func BenchmarkCompileCacheKey(b *testing.B) {
 
 func TestCompileCache_ConcurrentJobsShareOneCompile(t *testing.T) {
 	t.Parallel()
-	c := newCompileCache(time.Minute)
+	c := newCompileCache(time.Minute, nil)
 	var runs atomic.Int32
 	release := make(chan struct{})
 	run := func() (compileOutcome, error) {
@@ -179,17 +183,17 @@ func TestCompileCache_ConcurrentJobsShareOneCompile(t *testing.T) {
 
 	const callers = 20
 	var wg sync.WaitGroup
-	shared := make([]bool, callers)
+	tiers := make([]cacheTier, callers)
 	ids := make([]string, callers)
 	for i := range callers {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			out, sh, err := c.compile(context.Background(), "k", run)
+			out, tier, err := c.compile(context.Background(), "k", run)
 			if err != nil {
 				t.Errorf("compile: %v", err)
 			}
-			shared[i], ids[i] = sh, out.fileID
+			tiers[i], ids[i] = tier, out.fileID
 		}()
 	}
 	time.Sleep(100 * time.Millisecond) // let every caller reach the wait
@@ -204,7 +208,7 @@ func TestCompileCache_ConcurrentJobsShareOneCompile(t *testing.T) {
 		if ids[i] != "bin-1" {
 			t.Errorf("caller %d got %q", i, ids[i])
 		}
-		if !shared[i] {
+		if tiers[i] == cacheTierMiss {
 			leaders++
 		}
 	}
@@ -212,14 +216,14 @@ func TestCompileCache_ConcurrentJobsShareOneCompile(t *testing.T) {
 		t.Errorf("%d callers report having compiled, want exactly 1", leaders)
 	}
 	// Later jobs hit the cache without compiling.
-	if out, sh, _ := c.compile(context.Background(), "k", run); !sh || out.fileID != "bin-1" || runs.Load() != 1 {
-		t.Errorf("a later job should hit the cache: %+v shared=%v runs=%d", out, sh, runs.Load())
+	if out, tier, _ := c.compile(context.Background(), "k", run); !cacheHit(tier) || out.fileID != "bin-1" || runs.Load() != 1 {
+		t.Errorf("a later job should hit the cache: %+v tier=%v runs=%d", out, tier, runs.Load())
 	}
 }
 
 func TestCompileCache_ASourceThatDoesNotCompileIsSharedButNotCached(t *testing.T) {
 	t.Parallel()
-	c := newCompileCache(time.Minute)
+	c := newCompileCache(time.Minute, nil)
 	var runs atomic.Int32
 	release := make(chan struct{})
 	run := func() (compileOutcome, error) {
@@ -245,14 +249,14 @@ func TestCompileCache_ASourceThatDoesNotCompileIsSharedButNotCached(t *testing.T
 		t.Fatalf("ran %d times, want once", runs.Load())
 	}
 	// A failure is not cached: the next job compiles again.
-	if _, shared, _ := c.compile(context.Background(), "bad", func() (compileOutcome, error) { runs.Add(1); return compileOutcome{failed: true}, nil }); shared || runs.Load() != 2 {
-		t.Fatalf("the failed source was cached: shared=%v runs=%d", shared, runs.Load())
+	if _, tier, _ := c.compile(context.Background(), "bad", func() (compileOutcome, error) { runs.Add(1); return compileOutcome{failed: true}, nil }); cacheHit(tier) || runs.Load() != 2 {
+		t.Fatalf("the failed source was cached: tier=%v runs=%d", tier, runs.Load())
 	}
 }
 
 func TestCompileCache_WaitersRetryWhenTheLeaderHitsATransientError(t *testing.T) {
 	t.Parallel()
-	c := newCompileCache(time.Minute)
+	c := newCompileCache(time.Minute, nil)
 	var runs atomic.Int32
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -288,7 +292,7 @@ func TestCompileCache_WaitersRetryWhenTheLeaderHitsATransientError(t *testing.T)
 
 func TestCompileCache_AWaiterGivesUpWhenItsContextEnds(t *testing.T) {
 	t.Parallel()
-	c := newCompileCache(time.Minute)
+	c := newCompileCache(time.Minute, nil)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	go func() {
@@ -309,12 +313,12 @@ func TestCompileCache_AWaiterGivesUpWhenItsContextEnds(t *testing.T) {
 
 func TestCompileCache_ZeroTTLCompilesEveryTime(t *testing.T) {
 	t.Parallel()
-	c := newCompileCache(0)
+	c := newCompileCache(0, nil)
 	var runs int
 	for range 3 {
-		_, shared, _ := c.compile(context.Background(), "k", func() (compileOutcome, error) { runs++; return compileOutcome{fileID: "x"}, nil })
-		if shared {
-			t.Fatal("a disabled cache reported a shared compile")
+		_, tier, _ := c.compile(context.Background(), "k", func() (compileOutcome, error) { runs++; return compileOutcome{fileID: "x"}, nil })
+		if cacheHit(tier) {
+			t.Fatal("a disabled cache reported a cache hit")
 		}
 	}
 	if runs != 3 {

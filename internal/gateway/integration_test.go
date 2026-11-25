@@ -269,7 +269,7 @@ func startStack(t *testing.T, opts stackOptions) *stack {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	var wg sync.WaitGroup
-	worker.New(pool, judge, dc, ps, 10*time.Second, 1, 0).Start(ctx, 1, &wg)
+	worker.New(pool, judge, dc, ps, rdb, 10*time.Second, 1, 0).Start(ctx, 1, &wg)
 	t.Cleanup(func() {
 		cancel()
 		wg.Wait()

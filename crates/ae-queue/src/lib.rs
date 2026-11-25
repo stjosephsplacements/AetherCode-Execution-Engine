@@ -215,6 +215,12 @@ impl Queue {
         Ok(())
     }
 
+    /// Clone of the shared Redis connection (compile-cache L2, rate limits, etc.).
+    #[must_use]
+    pub fn redis_conn(&self) -> ConnectionManager {
+        self.conn.clone()
+    }
+
     /// Messages dead-lettered by the reclaimer since start.
     #[must_use]
     pub fn poisoned(&self) -> u64 {

@@ -138,6 +138,7 @@ func NewTieredHandler(pool *pgxpool.Pool, submitStream, runStream, bulkStream *q
 func (h *Handler) Register(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/execute", h.HandleExecute)
 	mux.HandleFunc("GET /api/v1/stream", h.HandleStream)
+	mux.HandleFunc("GET /api/v1/ws", h.HandleWS)
 	mux.HandleFunc("GET /api/v1/health", h.HandleHealth)
 	mux.HandleFunc("GET /api/v1/languages", h.HandleLanguages)
 	mux.HandleFunc("GET /api/v1/submissions/{id}", h.HandleGetSubmission)

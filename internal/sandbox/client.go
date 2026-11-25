@@ -37,7 +37,8 @@ func NewClient(baseURL, authToken string) *Client {
 				MaxIdleConnsPerHost:   256,
 				IdleConnTimeout:       90 * time.Second,
 				ResponseHeaderTimeout: 0, // batched /run calls vary in duration; context deadline governs
-				DisableCompression:    true,
+				// Allow transparent gzip on large /run responses; go-judge may omit it.
+				DisableCompression: false,
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 					dialer := &net.Dialer{
 						Timeout:   5 * time.Second,

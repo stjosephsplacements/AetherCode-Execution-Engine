@@ -8,6 +8,20 @@ import (
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/redis/go-redis/v9"
+)
+
+const compileCacheRedisPrefix = "ac:compile:"
+
+type cacheTier int
+
+const (
+	cacheTierMiss cacheTier = iota
+	cacheTierL1
+	cacheTierL2
+	// cacheTierShared is an inflight wait that reused another job's compile.
+	cacheTierShared
 )
 
 type cacheEntry struct {
@@ -20,13 +34,15 @@ type compileCache struct {
 	m        map[string]cacheEntry
 	inflight map[string]*compileFlight
 	ttl      time.Duration
+	rdb      *redis.Client
 }
 
-func newCompileCache(ttl time.Duration) *compileCache {
+func newCompileCache(ttl time.Duration, rdb *redis.Client) *compileCache {
 	return &compileCache{
 		m:        make(map[string]cacheEntry),
 		inflight: make(map[string]*compileFlight),
 		ttl:      ttl,
+		rdb:      rdb,
 	}
 }
 
@@ -54,39 +70,47 @@ type compileFlight struct {
 // cached. If the leader's run fails for a reason of its own (the sandbox was
 // unreachable, say), each waiter tries again for itself. With a zero ttl the
 // cache is off and every call runs run.
-func (c *compileCache) compile(ctx context.Context, key string, run func() (compileOutcome, error)) (outcome compileOutcome, shared bool, err error) {
+func (c *compileCache) compile(ctx context.Context, key string, run func() (compileOutcome, error)) (outcome compileOutcome, tier cacheTier, err error) {
 	if c.ttl == 0 {
 		outcome, err = run()
-		return outcome, false, err
+		return outcome, cacheTierMiss, err
 	}
 	for {
 		c.mu.Lock()
 		if e, ok := c.m[key]; ok && time.Since(e.created) <= c.ttl {
 			c.mu.Unlock()
-			return compileOutcome{fileID: e.fileID}, true, nil
+			return compileOutcome{fileID: e.fileID}, cacheTierL1, nil
 		}
+		c.mu.Unlock()
+
+		if fileID, ok := c.l2Get(ctx, key); ok {
+			c.put(key, fileID)
+			return compileOutcome{fileID: fileID}, cacheTierL2, nil
+		}
+
+		c.mu.Lock()
 		flight, running := c.inflight[key]
 		if !running {
 			flight = &compileFlight{done: make(chan struct{})}
 			c.inflight[key] = flight
 			c.mu.Unlock()
-			return c.lead(key, flight, run)
+			return c.lead(ctx, key, flight, run)
 		}
 		c.mu.Unlock()
 
 		select {
 		case <-flight.done:
 			if flight.err == nil {
-				return flight.outcome, true, nil
+				return flight.outcome, cacheTierShared, nil
 			}
 			// The leader failed for its own reasons: try again, as the leader if no one else has.
 		case <-ctx.Done():
-			return compileOutcome{}, false, ctx.Err()
+			return compileOutcome{}, cacheTierMiss, ctx.Err()
 		}
 	}
 }
 
-func (c *compileCache) lead(key string, flight *compileFlight, run func() (compileOutcome, error)) (compileOutcome, bool, error) {
+func (c *compileCache) lead(ctx context.Context, key string, flight *compileFlight, run func() (compileOutcome, error)) (compileOutcome, cacheTier, error) {
 	defer func() {
 		c.mu.Lock()
 		delete(c.inflight, key)
@@ -97,8 +121,31 @@ func (c *compileCache) lead(key string, flight *compileFlight, run func() (compi
 	flight.outcome, flight.err = outcome, err
 	if err == nil && !outcome.failed {
 		c.put(key, outcome.fileID)
+		c.l2Put(ctx, key, outcome.fileID)
 	}
-	return outcome, false, err
+	return outcome, cacheTierMiss, err
+}
+
+func (c *compileCache) l2Get(ctx context.Context, key string) (string, bool) {
+	if c.rdb == nil || c.ttl == 0 {
+		return "", false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	val, err := c.rdb.Get(ctx, compileCacheRedisPrefix+key).Result()
+	if err != nil || val == "" {
+		return "", false
+	}
+	return val, true
+}
+
+func (c *compileCache) l2Put(ctx context.Context, key, fileID string) {
+	if c.rdb == nil || c.ttl == 0 || fileID == "" {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	_ = c.rdb.Set(ctx, compileCacheRedisPrefix+key, fileID, c.ttl).Err()
 }
 
 func compileCacheKey(language, source string) string {

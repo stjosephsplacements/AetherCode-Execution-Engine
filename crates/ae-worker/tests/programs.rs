@@ -24,6 +24,7 @@ async fn setup() -> (Arc<FakeSandbox>, Arc<ae_sandbox::Registry>, CompileCache) 
         sb.clone() as Arc<dyn Sandbox>,
         Duration::from_secs(300),
         1 << 30,
+        None,
     );
     (sb, reg, cache)
 }
@@ -103,6 +104,7 @@ async fn stdin_source_languages_cannot_be_checkers_or_interactors() {
         sb.clone() as Arc<dyn Sandbox>,
         Duration::from_secs(300),
         1 << 30,
+        None,
     );
     let sbd: Arc<dyn Sandbox> = sb.clone();
     for kind in ["checker", "interactor"] {

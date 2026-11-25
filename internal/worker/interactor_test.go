@@ -61,7 +61,7 @@ func TestInteractiveProblems_Workflow(t *testing.T) {
 	defer srv.Close()
 
 	judgeClient := sandbox.NewClient(srv.URL, "dummy")
-	w := New(nil, judgeClient, nil, nil, 10*time.Second, 1, 5*time.Minute)
+	w := New(nil, judgeClient, nil, nil, nil, 10*time.Second, 1, 5*time.Minute)
 
 	ctx := context.Background()
 

@@ -10,6 +10,7 @@ pub mod middleware;
 pub mod ratelimit;
 mod router;
 pub mod sse;
+pub mod ws;
 
 pub use handlers::AppState;
 pub use metrics::metrics_router;

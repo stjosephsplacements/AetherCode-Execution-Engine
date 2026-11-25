@@ -116,7 +116,7 @@ func main() {
 
 	// Workers (dual-consumer weighted fair queuing)
 	var workerWg sync.WaitGroup
-	w := worker.New(pool, judge, dualConsumer, pubsub, cfg.JobTimeout, cfg.TestParallelism, cfg.CompileCacheTTL)
+	w := worker.New(pool, judge, dualConsumer, pubsub, rdb, cfg.JobTimeout, cfg.TestParallelism, cfg.CompileCacheTTL)
 	w.Start(ctx, cfg.WorkerCount, &workerWg)
 
 	// Reclaimer — picks up stuck messages every 30s
@@ -139,6 +139,14 @@ func main() {
 		defer bgWg.Done()
 		reapOrphans(ctx, pool, runStream)
 	}()
+
+	if cfg.DBRetentionDays > 0 {
+		bgWg.Add(1)
+		go func() {
+			defer bgWg.Done()
+			pruneRetention(ctx, pool, cfg.DBRetentionDays)
+		}()
+	}
 
 	// Rate limiters
 	rl := ratelimit.New(rdb, cfg.RateLimitPerMinute, cfg.RateLimitBurst)
@@ -187,6 +195,10 @@ func main() {
 	// CORS (must be outside auth so OPTIONS preflight works without a token)
 	cors := gateway.NewCORS(cfg.CORSAllowedOrigins)
 	handler = cors.Wrap(handler)
+
+	// Gzip: decompress inbound bodies; compress JSON responses (SSE excluded).
+	handler = gateway.GzipDecompressMiddleware(handler)
+	handler = gateway.GzipResponseMiddleware(handler)
 
 	// Request logging (outermost — captures everything including CORS and auth)
 	handler = gateway.LoggingMiddleware(handler)
@@ -290,6 +302,28 @@ func parseLogLevel(s string) slog.Level {
 		return slog.LevelError
 	default:
 		return slog.LevelInfo
+	}
+}
+
+func pruneRetention(ctx context.Context, pool *pgxpool.Pool, retentionDays int) {
+	ticker := time.NewTicker(time.Hour)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			n, err := db.PruneRetentionEligible(ctx, pool, retentionDays)
+			if err != nil {
+				if ctx.Err() == nil {
+					slog.Error("retention pruner: failed", "err", err)
+				}
+				continue
+			}
+			if n > 0 {
+				slog.Info("retention pruner: deleted submissions", "count", n, "retention_days", retentionDays)
+			}
+		}
 	}
 }
 

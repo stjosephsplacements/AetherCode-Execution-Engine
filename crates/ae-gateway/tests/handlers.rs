@@ -661,7 +661,7 @@ async fn livez_readyz_and_metrics() {
     // The worker hook feeds the job metrics and the admission drain rate.
     let obs = st.state.worker_observer();
     obs.job_started();
-    obs.compiled("cpp", Duration::from_millis(5), false);
+    obs.compiled("cpp", Duration::from_millis(5), ae_core::observe::CompileCacheSource::Miss);
     obs.stage("run", Duration::from_millis(5));
     obs.job_finished(
         "cpp",
@@ -712,6 +712,9 @@ async fn livez_readyz_and_metrics() {
         "ac_stage_duration_seconds",
         "ac_queue_age_seconds",
         "ac_compile_cache_hits_total",
+        "ac_compile_cache_l1_hits_total",
+        "ac_compile_cache_l2_hits_total",
+        "ac_compile_cache_misses_total",
         "ac_scheduler_budget_used",
     ] {
         assert!(

@@ -45,6 +45,7 @@ Rust (`crates/`, `Dockerfile.rs`, binary `engine`) is the forward path. Go (`cmd
 - [API Reference](#api-reference)
   - [POST /api/v1/execute](#post-apiv1execute)
   - [GET /api/v1/stream](#get-apiv1stream)
+  - [GET /api/v1/ws](#get-apiv1ws)
   - [GET /api/v1/health](#get-apiv1health)
   - [GET /api/v1/languages](#get-apiv1languages)
   - [GET /api/v1/submissions/{id}](#get-apiv1submissionsid)
@@ -273,6 +274,7 @@ Configuration parameters are loaded from environment variables on startup. Refer
 | `AC_GOGC` | `200` | Garbage collection target percentage for Go runtime |
 | `AC_SANDBOX_STDOUT_MAX_BYTES` | `8388608` (8 MB) | Maximum standard output captured per test |
 | `AC_SANDBOX_STDERR_MAX_BYTES` | `1048576` (1 MB) | Maximum standard error captured per test |
+| `AC_DB_RETENTION_DAYS` | `0` (disabled) | When set to a positive integer, a background job hourly deletes `completed` and `failed` submissions (and their `submission_test_results`) whose `updated_at` is older than this many days. Use `SELECT count_submissions_eligible_for_retention(N)` in Postgres for a dry-run count before enabling. |
 
 ### Production Tuning Checklist
 
@@ -374,7 +376,7 @@ Submit code for evaluation against test cases.
 
 ### GET /api/v1/stream
 
-Subscribe to real-time execution lifecycle events using Server-Sent Events (SSE).
+Subscribe to real-time execution lifecycle events using Server-Sent Events (SSE). Clients that prefer WebSockets can use [`GET /api/v1/ws`](#get-apiv1ws) instead (same auth and event JSON).
 
 **Query Parameters:**
 - `job_id`: Target job UUID returned by `POST /api/v1/execute` (Required).
@@ -470,6 +472,12 @@ data: {
 
 ---
 
+### GET /api/v1/ws
+
+WebSocket alternative to `/api/v1/stream`. Uses the same query parameters (`job_id`, `stream_token`), headers (`Last-Event-ID`, `Authorization`), ownership checks, event-log replay, and live subscription. Each WebSocket **text** message is the JSON event object (equivalent to an SSE `data:` payload). Server keepalive uses WebSocket ping/pong (15s). The connection closes after a terminal `VERDICT` event or the same 5-minute lifetime fallback as SSE.
+
+---
+
 ### GET /api/v1/health
 
 Comprehensive health check querying PostgreSQL, Redis, and sandbox subsystems.
@@ -538,7 +546,7 @@ Cancels an active or queued submission. Marks the submission record as `failed` 
 | `kotlin` | `kotlinc` and OpenJDK 21 | Yes | 2.0 s | 512 MB (Min 256 MB) |
 | `typescript` | Bun | No | 2.0 s | 512 MB |
 
-The bundled sandbox image (`docker/go-judge`) installs every language above except `kotlin` and `typescript`, which have no Debian package. At startup, and every five minutes, the engine checks that each language's compiler and runtime exist in the sandbox: `GET /api/v1/languages` reports `available`, and `POST /api/v1/execute` answers `400` for a language that is not installed. Install `kotlinc` or `bun` in your own sandbox image to enable them.
+The bundled sandbox image (`docker/go-judge`) installs every language above except `typescript` (Bun has no Debian package). Kotlin ships as a pinned JetBrains `kotlinc` (`KOTLIN_VERSION` in the Dockerfile). At startup, and every five minutes, the engine checks that each language's compiler and runtime exist in the sandbox: `GET /api/v1/languages` reports `available`, and `POST /api/v1/execute` answers `400` for a language that is not installed. Install `bun` in your own sandbox image to enable TypeScript.
 
 Compilation phase limits: C and C++ allow 10 s CPU and 256 MB RAM; Java allows 15 s CPU and 512 MB RAM; Go allows 30 s CPU and 1 GB RAM.
 

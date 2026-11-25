@@ -1,0 +1,29 @@
+# Forwards in-cluster pg-main:5432 → host PgBouncer 10.1.55.99:6432 (same pattern as question-intake).
+apiVersion: v1
+kind: Service
+metadata:
+  name: pg-main
+  namespace: aethercode
+  labels:
+    app.kubernetes.io/part-of: aethercode
+    app.kubernetes.io/name: pg-main
+spec:
+  ports:
+    - name: pg
+      port: 5432
+      targetPort: 6432
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: pg-main-1
+  namespace: aethercode
+  labels:
+    kubernetes.io/service-name: pg-main
+addressType: IPv4
+ports:
+  - name: pg
+    port: 6432
+    protocol: TCP
+endpoints:
+  - addresses: ["10.1.55.99"]

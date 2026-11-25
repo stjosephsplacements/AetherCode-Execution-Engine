@@ -1,0 +1,44 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aethercode-exec
+  namespace: aethercode
+spec:
+  replicas: 2
+  minReadySeconds: 10
+  progressDeadlineSeconds: 300
+  revisionHistoryLimit: 5
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: aethercode
+    spec:
+      terminationGracePeriodSeconds: 135
+      containers:
+        - name: engine
+          imagePullPolicy: IfNotPresent
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "8"]
+          startupProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 30
+          env:
+            - name: AC_JUDGE_URL
+              value: http://go-judge-svc.aethercode.svc.cluster.local:5050
+            - name: AC_REDIS_ADDR
+              value: aethercode-exec-redis.aethercode.svc.cluster.local:6379
+            - name: AC_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: aethercode-exec-secrets
+                  key: AC_DATABASE_URL

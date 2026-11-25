@@ -1,0 +1,34 @@
+# Campus production (St. Joseph's k3s). Images built on-server, never :latest.
+# Apply only after owner review (campus prompt §11.2).
+#
+#   kubectl kustomize deploy/k8s-overlays/campus-production
+#   # after approvals + secrets + DB:
+#   kubectl apply --server-side -k deploy/k8s-overlays/campus-production
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: aethercode
+
+resources:
+  - ../../k8s
+  - pg-main.yaml
+  - redis.yaml
+  - servicemonitor.yaml
+
+patches:
+  - path: patch-engine-rolling.yaml
+  - path: patch-go-judge-image.yaml
+  - path: patch-hpa-stabilization.yaml
+
+images:
+  - name: ghcr.io/stjosephsplacements/aethercode-execution-engine
+    newName: aethercode/exec-engine
+    newTag: PLACEHOLDER_SHA
+  - name: ghcr.io/stjosephsplacements/aethercode-go-judge
+    newName: aethercode/go-judge
+    newTag: PLACEHOLDER_SHA
+
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: aethercode
+    includeSelectors: false

@@ -3,6 +3,7 @@
 mod migrate;
 mod pool;
 mod queries;
+mod retention;
 
 pub use pool::{Db, connect};
 pub use queries::truncate;

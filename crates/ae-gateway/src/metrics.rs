@@ -4,6 +4,7 @@
 
 use crate::admission::Drain;
 use ae_core::model::Verdict;
+use ae_core::observe::CompileCacheSource;
 use ae_core::observe::JobObserver;
 use ae_queue::Queue;
 use axum::Router;
@@ -54,6 +55,9 @@ pub struct Metrics {
     pub stage_duration: HistogramVec,
     pub queue_age: GaugeVec,
     pub compile_cache_hits: IntCounter,
+    pub compile_cache_l1_hits: IntCounter,
+    pub compile_cache_l2_hits: IntCounter,
+    pub compile_cache_misses: IntCounter,
     pub scheduler_budget_used: GaugeVec,
 }
 
@@ -149,6 +153,18 @@ impl Metrics {
                 "compile_cache_hits_total",
                 "Compile cache hits: the binary was reused, skipping recompilation.",
             ))?,
+            compile_cache_l1_hits: IntCounter::with_opts(opts(
+                "compile_cache_l1_hits_total",
+                "Compile cache L1 hits: in-process cache satisfied the request.",
+            ))?,
+            compile_cache_l2_hits: IntCounter::with_opts(opts(
+                "compile_cache_l2_hits_total",
+                "Compile cache L2 hits: Redis distributed cache satisfied the request.",
+            ))?,
+            compile_cache_misses: IntCounter::with_opts(opts(
+                "compile_cache_misses_total",
+                "Compile cache misses: compilation was required.",
+            ))?,
             scheduler_budget_used: GaugeVec::new(
                 opts(
                     "scheduler_budget_used",
@@ -171,6 +187,9 @@ impl Metrics {
         r.register(Box::new(m.stage_duration.clone()))?;
         r.register(Box::new(m.queue_age.clone()))?;
         r.register(Box::new(m.compile_cache_hits.clone()))?;
+        r.register(Box::new(m.compile_cache_l1_hits.clone()))?;
+        r.register(Box::new(m.compile_cache_l2_hits.clone()))?;
+        r.register(Box::new(m.compile_cache_misses.clone()))?;
         r.register(Box::new(m.scheduler_budget_used.clone()))?;
         // Series with a fixed label set exist from the start, so dashboards see zeros.
         for v in VERDICTS {
@@ -308,14 +327,23 @@ impl JobObserver for WorkerMetrics {
             .with_label_values(&[language, v.as_str()])
             .observe(elapsed.as_secs_f64());
     }
-    fn compiled(&self, language: &str, elapsed: Duration, cache_hit: bool) {
+    fn compiled(&self, language: &str, elapsed: Duration, source: CompileCacheSource) {
         let m = metrics();
-        if cache_hit {
-            m.compile_cache_hits.inc();
-        } else {
-            m.compile_duration
-                .with_label_values(&[language])
-                .observe(elapsed.as_secs_f64());
+        match source {
+            CompileCacheSource::L1 => {
+                m.compile_cache_l1_hits.inc();
+                m.compile_cache_hits.inc();
+            }
+            CompileCacheSource::L2 => {
+                m.compile_cache_l2_hits.inc();
+                m.compile_cache_hits.inc();
+            }
+            CompileCacheSource::Miss => {
+                m.compile_cache_misses.inc();
+                m.compile_duration
+                    .with_label_values(&[language])
+                    .observe(elapsed.as_secs_f64());
+            }
         }
     }
     fn stage(&self, stage: &str, elapsed: Duration) {

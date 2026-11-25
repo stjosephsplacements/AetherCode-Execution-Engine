@@ -58,7 +58,7 @@ func rustJudge(t *testing.T, compileResult sandbox.Result) (*Worker, func() []sa
 	}))
 	t.Cleanup(srv.Close)
 
-	w := New(nil, sandbox.NewClient(srv.URL, "dummy"), nil, nil, 10*time.Second, 1, 5*time.Minute)
+	w := New(nil, sandbox.NewClient(srv.URL, "dummy"), nil, nil, nil, 10*time.Second, 1, 5*time.Minute)
 	return w, func() []sandbox.Request {
 		mu.Lock()
 		defer mu.Unlock()

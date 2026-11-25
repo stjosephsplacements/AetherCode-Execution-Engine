@@ -2,7 +2,9 @@
 //! with singleflight, TTL, an LRU size cap and sandbox-file cleanup.
 
 use crate::{Error, Result};
+use ae_core::observe::CompileCacheSource;
 use ae_sandbox::{FileId, Sandbox};
+use redis::aio::ConnectionManager;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
@@ -122,7 +124,11 @@ struct Shared {
     ttl: Duration,
     max_entries: usize,
     state: Mutex<State>,
+    redis: Option<ConnectionManager>,
 }
+
+const COMPILE_CACHE_REDIS_PREFIX: &str = "ac:compile:";
+const L2_REDIS_TIMEOUT: Duration = Duration::from_secs(2);
 
 impl Shared {
     fn lock(&self) -> std::sync::MutexGuard<'_, State> {
@@ -137,7 +143,6 @@ pub struct CompileCache {
 }
 
 enum Step {
-    Hit(CachedFile),
     Lead(watch::Sender<Flight>),
     Wait(watch::Receiver<Flight>),
 }
@@ -149,7 +154,12 @@ impl CompileCache {
     pub const ENTRY_BYTES: u64 = 1 << 20;
 
     /// A zero `ttl` disables caching: every call compiles and the file is released after use.
-    pub fn new(sandbox: Arc<dyn Sandbox>, ttl: Duration, max_bytes: u64) -> Self {
+    pub fn new(
+        sandbox: Arc<dyn Sandbox>,
+        ttl: Duration,
+        max_bytes: u64,
+        redis: Option<ConnectionManager>,
+    ) -> Self {
         let max_entries = usize::try_from(max_bytes / Self::ENTRY_BYTES)
             .unwrap_or(usize::MAX)
             .max(1);
@@ -159,6 +169,7 @@ impl CompileCache {
                 ttl,
                 max_entries,
                 state: Mutex::new(State::default()),
+                redis,
             }),
         }
     }
@@ -188,7 +199,11 @@ impl CompileCache {
     ///
     /// # Errors
     /// The compile's error.
-    pub async fn get_or_compile<F>(&self, key: CacheKey, compile: F) -> Result<(CachedFile, bool)>
+    pub async fn get_or_compile<F>(
+        &self,
+        key: CacheKey,
+        compile: F,
+    ) -> Result<(CachedFile, CompileCacheSource)>
     where
         F: Future<Output = Result<FileId>> + Send + 'static,
     {
@@ -198,16 +213,16 @@ impl CompileCache {
             let task =
                 tokio::spawn(async move { compile.await.map(|id| CachedFile::owned(id, sandbox)) });
             return match task.await {
-                Ok(r) => r.map(|f| (f, false)),
+                Ok(r) => r.map(|f| (f, CompileCacheSource::Miss)),
                 Err(e) => Err(Error::Other(format!("compile task: {e}"))),
             };
         }
         loop {
-            let step = {
+            let l1 = {
                 let mut st = sh.lock();
                 st.clock += 1;
                 let now = st.clock;
-                let fresh = match st.entries.get_mut(&key) {
+                match st.entries.get_mut(&key) {
                     Some(e) if e.created.elapsed() <= sh.ttl => {
                         e.last_used = now;
                         Some(e.file.clone())
@@ -217,21 +232,28 @@ impl CompileCache {
                         None
                     }
                     None => None,
-                };
-                match fresh {
-                    Some(f) => Step::Hit(f),
-                    None => match st.inflight.get(&key) {
-                        Some(rx) => Step::Wait(rx.clone()),
-                        None => {
-                            let (tx, rx) = watch::channel(Flight::Pending);
-                            st.inflight.insert(key.clone(), rx);
-                            Step::Lead(tx)
-                        }
-                    },
+                }
+            };
+            if let Some(f) = l1 {
+                return Ok((f, CompileCacheSource::L1));
+            }
+            if let Some(id) = self.l2_get(&key).await {
+                let file = CachedFile::owned(FileId(id), sh.sandbox.clone());
+                self.insert(&key, file.clone());
+                return Ok((file, CompileCacheSource::L2));
+            }
+            let step = {
+                let mut st = sh.lock();
+                match st.inflight.get(&key) {
+                    Some(rx) => Step::Wait(rx.clone()),
+                    None => {
+                        let (tx, rx) = watch::channel(Flight::Pending);
+                        st.inflight.insert(key.clone(), rx);
+                        Step::Lead(tx)
+                    }
                 }
             };
             match step {
-                Step::Hit(f) => return Ok((f, true)),
                 Step::Lead(tx) => return self.lead(key, tx, compile).await,
                 Step::Wait(mut rx) => {
                     let outcome = match rx.wait_for(|f| !matches!(f, Flight::Pending)).await {
@@ -239,7 +261,7 @@ impl CompileCache {
                         Err(_) => Flight::Retry,
                     };
                     match outcome {
-                        Flight::Ready(f) => return Ok((f, true)),
+                        Flight::Ready(f) => return Ok((f, CompileCacheSource::L1)),
                         Flight::Failed(stderr) => return Err(Error::Compile(stderr)),
                         Flight::Pending | Flight::Retry => {}
                     }
@@ -248,12 +270,39 @@ impl CompileCache {
         }
     }
 
+    async fn l2_get(&self, key: &CacheKey) -> Option<String> {
+        let mut conn = self.shared.redis.clone()?;
+        let redis_key = format!("{COMPILE_CACHE_REDIS_PREFIX}{}", key.as_str());
+        let mut cmd = redis::cmd("GET");
+        cmd.arg(&redis_key);
+        let op = cmd.query_async::<Option<String>>(&mut conn);
+        match tokio::time::timeout(L2_REDIS_TIMEOUT, op).await {
+            Ok(Ok(Some(id))) if !id.is_empty() => Some(id),
+            _ => None,
+        }
+    }
+
+    async fn l2_set(&self, key: &CacheKey, file_id: &str) {
+        if file_id.is_empty() {
+            return;
+        }
+        let Some(mut conn) = self.shared.redis.clone() else {
+            return;
+        };
+        let redis_key = format!("{COMPILE_CACHE_REDIS_PREFIX}{}", key.as_str());
+        let ttl_ms = i64::try_from(self.shared.ttl.as_millis()).unwrap_or(i64::MAX);
+        let mut cmd = redis::cmd("SET");
+        cmd.arg(&redis_key).arg(file_id).arg("PX").arg(ttl_ms);
+        let op = cmd.query_async::<()>(&mut conn);
+        let _ = tokio::time::timeout(L2_REDIS_TIMEOUT, op).await;
+    }
+
     async fn lead<F>(
         &self,
         key: CacheKey,
         tx: watch::Sender<Flight>,
         compile: F,
-    ) -> Result<(CachedFile, bool)>
+    ) -> Result<(CachedFile, CompileCacheSource)>
     where
         F: Future<Output = Result<FileId>> + Send + 'static,
     {
@@ -272,6 +321,7 @@ impl CompileCache {
                 Ok(id) => {
                     let file = CachedFile::owned(id, cache.shared.sandbox.clone());
                     cache.insert(&key, file.clone());
+                    cache.l2_set(&key, &file.id().0).await;
                     guard.tx.send_replace(Flight::Ready(file.clone()));
                     Ok(file)
                 }
@@ -288,7 +338,7 @@ impl CompileCache {
             }
         });
         match task.await {
-            Ok(r) => r.map(|f| (f, false)),
+            Ok(r) => r.map(|f| (f, CompileCacheSource::Miss)),
             Err(e) => Err(Error::Other(format!("compile task: {e}"))),
         }
     }

@@ -1,0 +1,16 @@
+# REQUIRES OWNER APPROVAL: privileged sandbox (cgroups + namespaces). See campus prompt §4.
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: go-judge
+  namespace: aethercode
+spec:
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: aethercode
+    spec:
+      containers:
+        - name: go-judge
+          imagePullPolicy: IfNotPresent
+          # privileged: true remains from base — owner must approve before apply.

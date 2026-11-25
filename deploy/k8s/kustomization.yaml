@@ -14,17 +14,12 @@ resources:
   - go-judge.yaml
   - networkpolicy.yaml
 
-# Secrets are never committed to VCS.
-# Copy deploy/k8s/.env.secret.example to deploy/k8s/.env.secret, fill in real
-# values, then run: kubectl apply -k deploy/k8s/
-# .env.secret is gitignored and must never be committed.
-secretGenerator:
-  - name: aethercode-exec-secrets
-    envs:
-      - .env.secret
+# Secrets are never committed or generated here. Create `aethercode-exec-secrets`
+# out of band (see deploy/SECRETS.md). Local/dev may still use:
+#   kubectl -n aethercode create secret generic aethercode-exec-secrets --from-env-file=deploy/k8s/.env.secret
 
 # Override image tag for a specific release:
 #   kustomize edit set image ghcr.io/stjosephsplacements/aethercode-execution-engine=:v1.2.3
 images:
   - name: ghcr.io/stjosephsplacements/aethercode-execution-engine
-    newTag: latest
+    newTag: SET_ME

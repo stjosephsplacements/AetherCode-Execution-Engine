@@ -6,6 +6,7 @@
 //! consuming, wait up to 120 s for in-flight jobs, close HTTP, flush telemetry, exit 0.
 //! A second signal exits immediately with status 1.
 
+mod retention;
 mod shadow;
 mod startup;
 mod supervisor;

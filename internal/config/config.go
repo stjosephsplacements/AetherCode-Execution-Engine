@@ -80,6 +80,9 @@ type Config struct {
 	// 32 bytes encoded as 64 hex characters.  Optional: if empty, callback_secret is
 	// stored without encryption (backwards-compatible, but discouraged).
 	WebhookMasterKey []byte
+
+	// DBRetentionDays: when > 0, delete completed/failed submissions older than this many days.
+	DBRetentionDays int
 }
 
 func Load() Config {
@@ -135,6 +138,8 @@ func Load() Config {
 		SandboxStderrMaxBytes: envInt64("AC_SANDBOX_STDERR_MAX_BYTES", 1<<20),
 
 		WebhookMasterKey: envHex("AC_WEBHOOK_MASTER_KEY", 32),
+
+		DBRetentionDays: envInt("AC_DB_RETENTION_DAYS", 0),
 	}
 }
 
@@ -173,6 +178,7 @@ func (c Config) Validate() error {
 	check(c.GOMEMLIMIT >= 0, "GOMEMLIMIT must be >= 0")
 	check(c.SandboxStdoutMaxBytes > 0 && c.SandboxStdoutMaxBytes <= 64<<20, "SandboxStdoutMaxBytes must be 1-67108864")
 	check(c.SandboxStderrMaxBytes > 0 && c.SandboxStderrMaxBytes <= 64<<20, "SandboxStderrMaxBytes must be 1-67108864")
+	check(c.DBRetentionDays >= 0, "DBRetentionDays must be >= 0")
 	check(logging.ValidFormat(c.LogFormat), "LogFormat (AC_LOG_FORMAT) must be one of: json, text, gcp, cloudwatch")
 
 	if c.AuthEnabled && c.OIDCAudience == "" {
