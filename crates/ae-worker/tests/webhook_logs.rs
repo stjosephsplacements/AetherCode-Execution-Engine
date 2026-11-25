@@ -72,14 +72,8 @@ async fn logs_never_contain_path_query_or_credentials() {
     let out = String::from_utf8(cap.0.lock().unwrap().clone()).unwrap();
     assert!(out.contains(&format!("http://{}", ok.address())), "{out}");
     assert!(out.contains("webhook attempt failed"), "{out}");
-    for secret in [
-        "SECRET",
-        "token",
-        "user:pass",
-        "pass@",
-        "/hook/private",
-        "s3cret",
-    ] {
-        assert!(!out.contains(secret), "{secret} leaked");
-    }
+    let leaked = ["SECRET", "token", "user:pass", "pass@", "/hook/private", "s3cret"]
+        .iter()
+        .any(|s| out.contains(s));
+    assert!(!leaked, "callback path, query or credentials appeared in logs");
 }

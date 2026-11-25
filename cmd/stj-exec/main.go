@@ -333,6 +333,9 @@ func scrapeQueueDepth(ctx context.Context, rdb *redis.Client, streams ...string)
 				metrics.QueueDepth.WithLabelValues(stream).Set(float64(length))
 			}
 		}
+		if length, err := rdb.XLen(ctx, "ac:dlq:poison").Result(); err == nil {
+			metrics.DLQPoisonStreamDepth.Set(float64(length))
+		}
 	}
 	scrape() // immediate first reading
 	ticker := time.NewTicker(15 * time.Second)

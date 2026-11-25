@@ -220,6 +220,23 @@ impl Queue {
     pub fn poisoned(&self) -> u64 {
         self.poisoned.load(std::sync::atomic::Ordering::Relaxed)
     }
+
+    /// Dead-letter stream name ([`DLQ_STREAM`] unless overridden).
+    #[must_use]
+    pub fn dlq_stream(&self) -> &str {
+        &self.dlq
+    }
+
+    /// `XLEN` of the dead-letter stream (0 when the key is absent).
+    ///
+    /// # Errors
+    /// Fails on a Redis error.
+    pub async fn dlq_depth(&self) -> Result<u64> {
+        Ok(redis::cmd("XLEN")
+            .arg(&self.dlq)
+            .query_async(&mut self.conn.clone())
+            .await?)
+    }
 }
 
 pub(crate) fn now_ms() -> i64 {

@@ -23,3 +23,9 @@ opt-level = 3
 
 [profile.dev.package.rsa]
 opt-level = 3
+
+# Security: testcontainers 0.25 pins astral-tokio-tar ^0.5.6 (max 0.5.6 on crates.io).
+# Modules do not yet support testcontainers 0.28 (which pulls 0.6.4+). Patch in 0.6.4
+# sources under a 0.5.7 version so Dependabot GHSA-*-tar alerts clear.
+[patch.crates-io]
+astral-tokio-tar = { path = "third_party/astral-tokio-tar" }

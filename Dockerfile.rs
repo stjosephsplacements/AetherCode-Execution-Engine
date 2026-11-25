@@ -14,6 +14,7 @@ WORKDIR /src
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates/ ./crates/
+COPY third_party/ ./third_party/
 RUN cargo chef prepare --recipe-path recipe.json
 
 # ---- Build: cached dependency layer, then the workspace ----
@@ -21,9 +22,12 @@ FROM chef AS build
 ENV CARGO_PROFILE_RELEASE_STRIP=symbols \
     CARGO_TERM_COLOR=never
 COPY --from=planner /src/recipe.json recipe.json
+COPY third_party/ ./third_party/
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 RUN cargo chef cook --release --locked --recipe-path recipe.json -p ae-engine
 COPY Cargo.toml Cargo.lock rust-toolchain.toml deny.toml ./
 COPY crates/ ./crates/
+COPY third_party/ ./third_party/
 COPY migrations/ ./migrations/
 RUN cargo build --release --locked -p ae-engine --bin engine \
     && cp target/release/engine /engine

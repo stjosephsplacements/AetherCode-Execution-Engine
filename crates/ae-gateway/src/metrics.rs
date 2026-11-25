@@ -50,6 +50,7 @@ pub struct Metrics {
     pub queue_depth: GaugeVec,
     pub rate_limit_rejections: IntCounterVec,
     pub poison_messages: IntCounter,
+    pub dlq_poison_stream_depth: Gauge,
     pub stage_duration: HistogramVec,
     pub queue_age: GaugeVec,
     pub compile_cache_hits: IntCounter,
@@ -125,6 +126,10 @@ impl Metrics {
                 "poison_messages_total",
                 "Messages dead-lettered after exceeding max delivery count.",
             ))?,
+            dlq_poison_stream_depth: Gauge::with_opts(opts(
+                "dlq_poison_stream_depth",
+                "Current XLEN of the ac:dlq:poison dead-letter stream.",
+            ))?,
             stage_duration: HistogramVec::new(
                 hopts(
                     "stage_duration_seconds",
@@ -162,6 +167,7 @@ impl Metrics {
         r.register(Box::new(m.queue_depth.clone()))?;
         r.register(Box::new(m.rate_limit_rejections.clone()))?;
         r.register(Box::new(m.poison_messages.clone()))?;
+        r.register(Box::new(m.dlq_poison_stream_depth.clone()))?;
         r.register(Box::new(m.stage_duration.clone()))?;
         r.register(Box::new(m.queue_age.clone()))?;
         r.register(Box::new(m.compile_cache_hits.clone()))?;
@@ -320,8 +326,8 @@ impl JobObserver for WorkerMetrics {
     }
 }
 
-/// One reading of `ac_queue_depth`, `ac_queue_age_seconds` and `ac_poison_messages_total`
-/// (the poison counter follows the queue's dead-letter count).
+/// One reading of `ac_queue_depth`, `ac_queue_age_seconds`, `ac_poison_messages_total`
+/// and `ac_dlq_poison_stream_depth` (the poison counter follows the queue's dead-letter count).
 pub async fn sample_queues(queue: &Queue) {
     let m = metrics();
     for s in queue.streams() {
@@ -337,6 +343,10 @@ pub async fn sample_queues(queue: &Queue) {
     let seen = m.poison_messages.get();
     if poisoned > seen {
         m.poison_messages.inc_by(poisoned - seen);
+    }
+    if let Ok(d) = queue.dlq_depth().await {
+        #[allow(clippy::cast_precision_loss)]
+        m.dlq_poison_stream_depth.set(d as f64);
     }
 }
 
