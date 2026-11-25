@@ -1,61 +1,65 @@
 version: 2
 
 updates:
-  # Go module dependencies (go.mod / go.sum)
-  - package-ecosystem: "gomod"
-    directory: "/"
+  - package-ecosystem: gomod
+    directory: /
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: weekly
+      day: monday
       time: "06:00"
-      timezone: "Asia/Kolkata"
-    target-branch: "development"
+      timezone: Asia/Kolkata
+    target-branch: development
     open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "gomod"
+    labels: [dependencies, gomod]
     commit-message:
       prefix: "chore(deps)"
-      include: "scope"
+      include: scope
     groups:
-      golang-x:
-        patterns:
-          - "golang.org/x/*"
-      prometheus:
-        patterns:
-          - "github.com/prometheus/*"
-      pgx:
-        patterns:
-          - "github.com/jackc/*"
+      go-deps:
+        patterns: ["*"]
 
-  # Container image versions (Dockerfile + docker-compose.yml)
-  - package-ecosystem: "docker"
-    directory: "/"
+  - package-ecosystem: cargo
+    directory: /rust
     schedule:
-      interval: "weekly"
-      day: "monday"
+      interval: weekly
+      day: monday
       time: "06:00"
-      timezone: "Asia/Kolkata"
-    target-branch: "development"
-    open-pull-requests-limit: 5
-    labels:
-      - "dependencies"
-      - "docker"
-    commit-message:
-      prefix: "chore(deps)"
-
-  # GitHub Actions workflow versions (.github/workflows)
-  - package-ecosystem: "github-actions"
-    directory: ".github/workflows"
-    schedule:
-      interval: "weekly"
-      day: "monday"
-      time: "06:00"
-      timezone: "Asia/Kolkata"
-    target-branch: "development"
+      timezone: Asia/Kolkata
+    target-branch: development
     open-pull-requests-limit: 10
-    labels:
-      - "dependencies"
-      - "github-actions"
+    labels: [dependencies, rust]
     commit-message:
       prefix: "chore(deps)"
+      include: scope
+    groups:
+      rust-deps:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Kolkata
+    target-branch: development
+    open-pull-requests-limit: 5
+    labels: [dependencies, docker]
+    commit-message:
+      prefix: "chore(deps)"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Asia/Kolkata
+    target-branch: development
+    open-pull-requests-limit: 10
+    labels: [dependencies, github-actions]
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      actions:
+        patterns: ["*"]

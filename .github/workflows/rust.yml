@@ -2,18 +2,14 @@ name: Rust
 
 on:
   push:
-    branches:
-      - development
-      - production
-      - "feature/**"
-      - "feat/**"
-      - "fix/**"
+    branches: [development, production]
     paths:
       - "rust/**"
       - "migrations/**"
       - ".dockerignore"
       - ".github/workflows/rust.yml"
   pull_request:
+    branches: [development, production]
     paths:
       - "rust/**"
       - "migrations/**"
@@ -28,7 +24,8 @@ env:
 
 jobs:
   rust:
-    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
     defaults:
       run:
         working-directory: rust
@@ -68,7 +65,8 @@ jobs:
 
   # Build only: the Rust image is deliberately not pushed or released yet (see release.yml).
   docker:
-    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login != 'dependabot[bot]'
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
