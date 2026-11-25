@@ -19,6 +19,7 @@ patches:
   - path: patch-engine-rolling.yaml
   - path: patch-go-judge-image.yaml
   - path: patch-hpa-stabilization.yaml
+  - path: patch-networkpolicy.yaml
 
 images:
   - name: ghcr.io/stjosephsplacements/aethercode-execution-engine

@@ -1,0 +1,45 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aethercode-exec-network-policy
+  namespace: aethercode
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: aethercode-exec
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from: []
+      ports:
+        - {protocol: TCP, port: 5100}
+        - {protocol: TCP, port: 6060}
+  egress:
+    - ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: go-judge
+      ports:
+        - {protocol: TCP, port: 5050}
+    # Central PgBouncer on the host (via pg-main Service → 10.1.55.99:6432).
+    - to:
+        - ipBlock:
+            cidr: 10.1.55.99/32
+      ports:
+        - {protocol: TCP, port: 6432}
+        - {protocol: TCP, port: 5432}
+    - to:
+        - podSelector:
+            matchLabels:
+              app.kubernetes.io/name: aethercode-exec-redis
+      ports:
+        - {protocol: TCP, port: 6379}
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+      ports:
+        - {protocol: TCP, port: 443}
