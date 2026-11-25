@@ -17,14 +17,14 @@ futures-util = "0.3"
 http = "1"
 ipnet = "2"
 opentelemetry = "0.33"
-jsonwebtoken = { version = "11", default-features = false, features = ["aws_lc_rs", "use_pem"] }
+jsonwebtoken = { version = "12", default-features = false, features = ["aws_lc_rs", "use_pem"] }
 prometheus = { version = "0.14", default-features = false }
-rand = "0.8"
+rand = "0.10"
 redis = { version = "1", features = ["tokio-comp", "connection-manager", "script"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres", "uuid"] }
 thiserror.workspace = true
 tokio = { version = "1", features = ["rt", "sync", "time", "macros", "net"] }
 tower = "0.5"
@@ -42,12 +42,12 @@ ae-worker = { path = "../ae-worker" }
 async-trait = "0.1"
 serde_yaml = "0.9"
 tokio-util = "0.7"
-base64 = "0.22"
+base64 = "0.23"
 http-body-util = "0.1"
-rand = "0.8"
+rand = "0.10"
 rsa = { version = "0.9", features = ["pem"] }
-testcontainers = "0.23"
-testcontainers-modules = { version = "0.11", features = ["redis", "postgres"] }
+testcontainers = "0.24"
+testcontainers-modules = { version = "0.12", features = ["redis", "postgres"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 uuid = { version = "1", features = ["v4"] }
