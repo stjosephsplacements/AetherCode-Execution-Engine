@@ -46,8 +46,8 @@ base64 = "0.23"
 http-body-util = "0.1"
 rand_core = { version = "0.6", features = ["getrandom"] }
 rsa = { version = "0.9", features = ["pem"] }
-testcontainers = "0.25"
-testcontainers-modules = { version = "0.13", features = ["redis", "postgres"] }
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["redis", "postgres"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
 uuid = { version = "1", features = ["v4"] }

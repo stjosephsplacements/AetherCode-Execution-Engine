@@ -31,8 +31,8 @@ url = "2"
 [dev-dependencies]
 redis = { version = "1.8.1", features = ["tokio-comp", "streams", "connection-manager"] }
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "postgres"] }
-testcontainers = "0.25"
-testcontainers-modules = { version = "0.13", features = ["redis", "postgres"] }
+testcontainers = "0.26"
+testcontainers-modules = { version = "0.14", features = ["redis", "postgres"] }
 tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "test-util"] }
 uuid = { version = "1.29.1", features = ["v4"] }
 wiremock = "0.6.5"
