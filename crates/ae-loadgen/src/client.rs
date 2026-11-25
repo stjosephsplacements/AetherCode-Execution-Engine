@@ -79,7 +79,11 @@ pub async fn run(cfg: Config) -> Result<Report, String> {
                     let mut rng = rand::rng();
                     let t = pick(&mut rng, &c.cfg.languages);
                     let (lo, hi) = (c.cfg.think_min, c.cfg.think_max.max(c.cfg.think_min));
-                    let think = if hi > lo { rng.random_range(lo..=hi) } else { lo };
+                    let think = if hi > lo {
+                        rng.random_range(lo..=hi)
+                    } else {
+                        lo
+                    };
                     (t, think)
                 };
                 let s = submit(&c, &t).await;
